@@ -14,6 +14,21 @@ unsigned int factorial(unsigned int val) {
     return result;
 }
 
+unsigned int binomial(unsigned int n, unsigned int k) {
+    if (k > n) {
+        return 0;
+    }
+    
+    unsigned int result = 1;
+    for (unsigned int i = n; i > n - k; i--) {
+        result *= i;
+    }
+    for (unsigned int i = 1; i <= k; i++) {
+        result /= i;
+    }
+    return result;
+}
+
 
 
 #endif

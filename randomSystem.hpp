@@ -19,7 +19,7 @@ struct System {
     unsigned int M;         // number of fermionic states
     double g;               // 2-particle interaction term, H = T + gV
 
-    // Basis vectors
+    // Basis vectors for the states
     unsigned int dimBasis;
     std::vector<std::vector<unsigned int>> basis;
 
@@ -56,7 +56,7 @@ class randomSystem {
         }
 
         void generateBasis() {
-            unsigned dimBasis = factorial(system.M) / (factorial(system.N) * factorial(system.M - system.N));
+            unsigned dimBasis = binomial(system.M, system.N);
             system.dimBasis = dimBasis;
             system.basis.reserve(dimBasis);
 
@@ -103,11 +103,12 @@ class randomSystem {
                                 factorT -= system.T(i, l);
                             }
                             auto [idx2, sign2] = getIdxV(k, l);
-                            system.K(idx1, idx2) += (1 / (system.N - 1)) * sign1 * sign2 * factorT;
+                            system.K(idx1, idx2) += (1 / ((system.N - 1))) * sign1 * sign2 * factorT;
                         }
                     }
                 }
             }
+            system.K *= 0.5;
         }
 
         void generateHMatrix() {
@@ -121,7 +122,19 @@ class randomSystem {
                     auto ket = system.basis[i];
                     auto bra = system.basis[j];
                     double H_ij = 0.0;
-                    
+
+                    // Count number of different elements in eigenstates
+                    unsigned int diff = 0;
+                    for (unsigned int idx = 0; idx < system.M; idx++) {
+                        if (ket[idx] != bra[idx]) {
+                            diff++;
+                        }
+                    }
+
+                    if (diff > 4) {
+                        continue;
+                    }
+
                     for (unsigned int l = 0; l < system.M; l++) {
                         for (unsigned int k = 0; k < l; k++) {
                             if (k == l || ket[k] == 0 || ket[l] == 0) {
@@ -152,7 +165,7 @@ class randomSystem {
                                     // Are ketNew and braNew equal?
                                     if (ketNew == braNew) {
                                         int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n));
-                                        H_ij += sign * getKElement(k, l, m, n);
+                                        H_ij += 2 * sign * getKElement(k, l, m, n);
                                     }
                                 }
                             }
