@@ -29,6 +29,14 @@ unsigned int binomial(unsigned int n, unsigned int k) {
     return result;
 }
 
+int signInt(int val) {
+    if (val >= 0) {
+        return 1;
+    } else {
+        return -1;
+    }
+}
+
 
 
 #endif
