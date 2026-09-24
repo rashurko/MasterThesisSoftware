@@ -164,7 +164,7 @@ class randomSystem {
                                     }
                                     // Are ketNew and braNew equal?
                                     if (ketNew == braNew) {
-                                        int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n));
+                                        int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n)) * signInt(l-k) * signInt(n-m);
                                         H_ij += 2 * sign * getKElement(k, l, m, n);
                                     }
                                 }
