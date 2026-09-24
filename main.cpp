@@ -26,7 +26,6 @@ int main() {
 
     while (running)
     {
-        // Access individual matrix elements
         std::cout << "1. Show T elements" << std::endl;
         std::cout << "2. Show V elements" << std::endl;
         std::cout << "3. Change T matrix" << std::endl;
@@ -91,6 +90,7 @@ int main() {
             }
             case 6: {
                 sys.diagonalizeH();
+                sys.saveToJson("exactSol.json");
                 break;
             }
             case 7: {

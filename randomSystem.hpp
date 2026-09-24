@@ -177,7 +177,7 @@ class randomSystem {
             }
 
             // print H
-            std::cout << "Matrix H:\n" << system.H << std::endl;
+            // std::cout << "Matrix H:\n" << system.H << std::endl;
         }
 
         void generateRandomMatrices() {
@@ -231,7 +231,7 @@ class randomSystem {
             system.exactEigenvectors = solver.eigenvectors();
 
             // print eigenvalues
-            std::cout << "Exact eigenvalues:\n" << system.exactEnergies << std::endl;
+            // std::cout << "Exact eigenvalues:\n" << system.exactEnergies << std::endl;
         }
 
         void setTElement(unsigned int i, unsigned int j, double value) {
@@ -347,6 +347,102 @@ class randomSystem {
             // 4. Rebuild K and H with the newly loaded physics
             generateKMatrix();
             generateHMatrix();
+        }
+
+        void saveToJson(const std::string& filename) const {
+            std::ofstream file(filename);
+            if (!file.is_open()) {
+                std::cerr << "Could not open file for writing: " << filename << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"N\": " << system.N << ",\n";
+            file << "  \"M\": " << system.M << ",\n";
+            file << "  \"g\": " << system.g << ",\n";
+
+            // Save T matrix
+            file << "  \"T\": [\n";
+            for (unsigned int i = 0; i < system.M; ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.M; ++j) {
+                    file << system.T(i, j);
+                    if (j < system.M - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.M - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Save V matrix
+            unsigned int P = system.M * (system.M - 1) / 2;
+            file << "  \"V\": [\n";
+            for (unsigned int i = 0; i < P; ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < P; ++j) {
+                    file << system.V(i, j);
+                    if (j < P - 1) file << ", ";
+                }
+                file << "]";
+                if (i < P - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Save K matrix
+            file << "  \"K\": [\n";
+            for (unsigned int i = 0; i < P; ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < P; ++j) {
+                    file << system.K(i, j);
+                    if (j < P - 1) file << ", ";
+                }
+                file << "]";
+                if (i < P - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Save H matrix
+            file << "  \"H\": [\n";
+            for (unsigned int i = 0; i < system.dimBasis; ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.dimBasis; ++j) {
+                    file << system.H(i, j);
+                    if (j < system.dimBasis - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.dimBasis - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Save eigenenergies
+            file << "  \"eigenenergies\": [\n";
+            for (unsigned int i = 0; i < system.dimBasis; ++i) {
+                file << "    " << system.exactEnergies[i];
+                if (i < system.dimBasis - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Save eigenvectors
+            file << "  \"eigenvectors\": [\n";
+            for (unsigned int i = 0; i < system.dimBasis; ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.dimBasis; ++j) {
+                    file << system.exactEigenvectors(i, j);
+                    if (j < system.dimBasis - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.dimBasis - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ]\n";
+
+            file << "}\n";
+
         }
 
 
