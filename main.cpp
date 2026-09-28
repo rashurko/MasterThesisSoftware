@@ -32,7 +32,8 @@ int main() {
         std::cout << "4. Change V matrix" << std::endl;
         std::cout << "5. Load T and V from csv" << std::endl;
         std::cout << "6. Calculate exact eigenvalues" << std::endl;
-        std::cout << "7. Exit" << std::endl;
+        std::cout << "7. Perform Potential Reduction Method" << std::endl;
+        std::cout << "8. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -94,6 +95,11 @@ int main() {
                 break;
             }
             case 7: {
+                sys.performPotentialReduction();
+                sys.saveToJsonPR("potentialReduction.json");
+                break;
+            }
+            case 8: {
                 running = false;
                 break;
             }
