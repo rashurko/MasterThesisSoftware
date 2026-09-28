@@ -34,6 +34,12 @@ struct System {
 
     // Reduced Hamiltonian K
     Eigen::MatrixXd K;
+
+    // ----------------------
+    // SDP
+
+    // Basis of traceless matrices
+    std::vector<std::vector<Eigen::MatrixXd>> fBasis;
 };
 
 class randomSystem {
@@ -164,7 +170,7 @@ class randomSystem {
                                     }
                                     // Are ketNew and braNew equal?
                                     if (ketNew == braNew) {
-                                        int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n)) * signInt(l-k) * signInt(n-m);
+                                        int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n));
                                         H_ij += 2 * sign * getKElement(k, l, m, n);
                                     }
                                 }
@@ -207,6 +213,74 @@ class randomSystem {
                 }
             }
             return count;
+        }
+
+        // -----------------------------------------------------------------------
+        // SDP
+
+        // Generate a basis of traceless matrices
+        void generateBasisF() {
+            system.fBasis.clear();
+            unsigned int D = system.M * (system.M - 1) / 2;
+
+            for (unsigned int j = 0; j < D; j++) {
+                std::vector<Eigen::MatrixXd> fBasis_j;
+                for (unsigned int i = 0; i <= j; i++) {
+                    Eigen::MatrixXd f_ij = Eigen::MatrixXd::Zero(D, D);
+                    // Generate orthonormal traceless matrices: f_ii = 0
+                    if (i != j) {
+                        f_ij(i, j) = 1.0;
+                        f_ij(j, i) = 1.0;
+                        f_ij /= f_ij.norm();
+                        fBasis_j.push_back(f_ij);
+                    }
+                    // Generate orthonormal traceless matrices with elements only on the diagonal (using Gram-Schmidt algorithm)
+                    else if (i != D - 1) {
+                        // Initialize initial diagonal matrix
+                        f_ij(0, 0) = 1.0;
+                        f_ij(i+1, i+1) = -1.0;
+
+                        // Use Gram-Schmidt algorithm to construct orthonormal vectors
+                        Eigen::MatrixXd f_ij_orth = f_ij;
+                        for (unsigned int k = 0; k < i; k++) {
+                            f_ij_orth -= productDiagMatrices(system.fBasis[k][k], f_ij) * system.fBasis[k][k];
+                        }
+                        f_ij_orth /= normDiagMatrix(f_ij_orth);
+
+                        fBasis_j.push_back(f_ij_orth);
+                    }
+                }
+                system.fBasis.push_back(fBasis_j);
+            }
+        }
+
+        // Test that the fBasis is traceless.
+        void testFBasisTraceless() const {
+            for (const auto& fBasis_j : system.fBasis) {
+                for (const auto& f_ij : fBasis_j) {
+                    double trace = f_ij.trace();
+                    if (std::abs(trace) > 1e-10) {
+                        std::cerr << "fBasis is not traceless!" << std::endl;
+                        return;
+                    }
+                }
+            }
+            std::cout << "fBasis is traceless." << std::endl;
+        }
+
+        // Test that the fBasis is orthonormal
+        void testFBasisOrthonormal() const {
+            for (const auto& fBasis_j : system.fBasis) {
+                for (const auto& f_ij : fBasis_j) {
+                    double norm = f_ij.norm();
+                    if (std::abs(norm - 1.0) > 1e-10) {
+                        std::cout << norm << std::endl;
+                        std::cerr << "fBasis is not orthonormal!" << std::endl;
+                        return;
+                    }
+                }
+            }
+            std::cout << "fBasis is orthonormal." << std::endl;
         }
 
     public:
@@ -445,9 +519,52 @@ class randomSystem {
 
         }
 
+        // -----------------------------------------------
+        // SDP
 
+        void performPotentialReduction() {
+            // Generate basis for traceless matrices
+            generateBasisF();
 
-        
+            // Test that the fBasis is traceless
+            testFBasisTraceless();
+
+            // Test that the fBasis is orthonormal
+            testFBasisOrthonormal();
+
+        }
+
+        // Save the result of Potential Reduction to a Json where the system.fBasis is changed to a vector in a vector
+        void saveToJsonPR(const std::string& filename) const {
+            std::ofstream file(filename);
+            if (!file) {
+                std::cerr << "Error opening file for writing: " << filename << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"f Basis\": [\n";
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    file << "[";
+                    for (unsigned int k = 0; k < system.fBasis[i][j].rows(); k++) {
+                        file << "[";
+                        for (unsigned int l = 0; l < system.fBasis[i][j].cols(); l++) {
+                            file << system.fBasis[i][j](k, l);
+                            if (l < system.fBasis[i][j].cols() - 1) file << ", ";
+                        }
+                        file << "]";
+                        if (k < system.fBasis[i][j].rows() - 1) file << ",\n ";
+                    }
+                    file << "]";
+                    if (not(i == system.fBasis.size() - 1 && j == system.fBasis[i].size() - 1)) file << ",";
+                    file << "\n";
+                }
+            }
+            file << "  ]\n";
+
+            file << "}\n";
+        }
 };
 
 
