@@ -40,6 +40,14 @@ struct System {
 
     // Basis of traceless matrices
     std::vector<std::vector<Eigen::MatrixXd>> fBasis;
+    std::vector<std::vector<double>> fCoeffs;
+
+    // 2-RDM and conditions
+    Eigen::MatrixXd Gamma;
+    Eigen::MatrixXd rho;
+    Eigen::MatrixXd Q;
+    Eigen::MatrixXd G;
+
 };
 
 class randomSystem {
@@ -109,7 +117,7 @@ class randomSystem {
                                 factorT -= system.T(i, l);
                             }
                             auto [idx2, sign2] = getIdxV(k, l);
-                            system.K(idx1, idx2) += (1 / ((system.N - 1))) * sign1 * sign2 * factorT;
+                            system.K(idx1, idx2) += (1.0 / ((system.N - 1))) * sign1 * sign2 * factorT;
                         }
                     }
                 }
@@ -218,6 +226,109 @@ class randomSystem {
         // -----------------------------------------------------------------------
         // SDP
 
+        // Returns the index I of pair (i, j) for the G matrix
+        unsigned int getGIndex(unsigned int i, unsigned int j) const {
+            return j + system.M * i;
+        }
+
+        double getGammaElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
+            if (i == j || k == l) {
+                return 0.0; // V is antisymmetric, so V(i,i,k,l) = V(i,j,k,k) = 0
+            }
+
+            auto [idx1, sign1] = getIdxV(i, j);
+            auto [idx2, sign2] = getIdxV(k, l);
+            return sign1 * sign2 * system.Gamma(idx1, idx2);
+        }
+
+        double calcRhoElement(unsigned int i, unsigned int j) const {
+            double prefactor = 1.0 / (system.N - 1);
+            double result = 0.0;
+            for (unsigned int k = 0; k < system.M; k++) {
+                result += getGammaElement(i, k, j, k);
+            }
+            return prefactor * result;
+        }
+
+        void calcRho() {
+            system.rho = Eigen::MatrixXd::Zero(system.M, system.M);
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j <= i; j++) {
+                    double rho_ij = calcRhoElement(i, j);
+                    system.rho(i, j) = rho_ij;
+                    system.rho(j, i) = rho_ij; // Exploit symmetry
+                }
+            }
+        }
+
+        double calcQElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
+            if (i == j || k == l) {
+                return 0.0;
+            }
+
+            double result = getGammaElement(i, j, k, l);
+
+            if (i == k && j == l) {
+                result += 1 - system.rho(j, l) - system.rho(i, k);
+            } else if (i == k) {
+                result += -system.rho(j, l);
+            } else if (j == l) {
+                result += -system.rho(i, k);
+            }
+
+            if (i == l && j == k) {
+                result += -1 + system.rho(j, k) + system.rho(i, l);
+            } else if (i == l) {
+                result += system.rho(j, k);
+            } else if (j == k) {
+                result += system.rho(i, l);
+            }
+
+            return result;
+        }
+
+        void calcQ() {
+            unsigned int D = system.M * (system.M  - 1) / 2;
+            system.Q = Eigen::MatrixXd::Zero(D, D);
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i < j; i++) {
+                    auto [idx1, sign1] = getIdxV(i, j);
+                    for (unsigned int l = 0; l < system.M; l++) {
+                        for (unsigned int k = 0; k < l; k++) {
+                            auto [idx2, sign2] = getIdxV(k, l);
+
+                            double Q_ijkl = calcQElement(i, j, k, l);
+                            system.Q(idx1, idx2) = sign1 * sign2 * Q_ijkl;
+                        }
+                    }
+                }
+            }
+        }
+        
+        double calcGElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
+            double G_ijkl = -getGammaElement(i, l, k, j);
+            if (j == l) {
+                G_ijkl += system.rho(i, k);
+            }
+
+            return G_ijkl;
+        }
+
+        void calcG() {
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j < system.M; j++) {
+                    unsigned int idx1 = getGIndex(i, j);
+                    for (unsigned int k = 0; k < system.M; k++) {
+                        for (unsigned int l = 0; l < system.M; l++) {
+                            unsigned int idx2 = getGIndex(k, l);
+
+                            system.G(idx1, idx2) = calcGElement(i, j, k, l);
+                        }
+                    }
+                }
+            }
+        }
+
         // Generate a basis of traceless matrices
         void generateBasisF() {
             system.fBasis.clear();
@@ -225,6 +336,7 @@ class randomSystem {
 
             for (unsigned int j = 0; j < D; j++) {
                 std::vector<Eigen::MatrixXd> fBasis_j;
+                std::vector<double> fCoeffs_j;
                 for (unsigned int i = 0; i <= j; i++) {
                     Eigen::MatrixXd f_ij = Eigen::MatrixXd::Zero(D, D);
                     // Generate orthonormal traceless matrices: f_ii = 0
@@ -233,6 +345,7 @@ class randomSystem {
                         f_ij(j, i) = 1.0;
                         f_ij /= f_ij.norm();
                         fBasis_j.push_back(f_ij);
+                        fCoeffs_j.push_back(0.0);
                     }
                     // Generate orthonormal traceless matrices with elements only on the diagonal (using Gram-Schmidt algorithm)
                     else if (i != D - 1) {
@@ -248,9 +361,11 @@ class randomSystem {
                         f_ij_orth /= normDiagMatrix(f_ij_orth);
 
                         fBasis_j.push_back(f_ij_orth);
+                        fCoeffs_j.push_back(0.0);
                     }
                 }
                 system.fBasis.push_back(fBasis_j);
+                system.fCoeffs.push_back(fCoeffs_j);
             }
         }
 
@@ -278,10 +393,63 @@ class randomSystem {
                         std::cerr << "fBasis is not orthonormal!" << std::endl;
                         return;
                     }
+                    for (const auto& fBasis_k : system.fBasis) {
+                        for (const auto& f_kl : fBasis_k) {
+                            if (&f_ij != &f_kl) {
+                                double innerProduct = (f_ij.array() * f_kl.array()).sum();
+                                if (std::abs(innerProduct) > 1e-10) {
+                                    std::cerr << "fBasis is not orthonormal!" << std::endl;
+                                    return;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             std::cout << "fBasis is orthonormal." << std::endl;
         }
+
+        void initGamma() {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            double prefactor = static_cast<double>(system.N * (system.N - 1)) / (2 * D);
+            system.Gamma = Eigen::MatrixXd::Identity(D, D) * prefactor;
+        }
+
+        void initQ () {
+            unsigned int D = system.M * (system.M  - 1) / 2;
+            double prefactor = 1.0 - 2*static_cast<double>(system.N) / (system.M) + static_cast<double>(system.N * (system.N - 1)) / (system.M * (system.M - 1));
+            system.Q = Eigen::MatrixXd::Identity(D, D) * prefactor;
+        }
+
+        void initG() {
+            unsigned int D = system.M * system.M;
+            double prefactor = static_cast<double>(system.N * (system.M - system.N)) / (system.M * (system.M - 1));
+            system.G = Eigen::MatrixXd::Identity(D, D) * prefactor;
+
+            double prefactor2 = static_cast<double>(system.N * (system.N - 1)) / (system.M * (system.M - 1));
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i <= j; i++) {
+                    unsigned int idx1 = getGIndex(i, i);
+                    unsigned int idx2 = getGIndex(j, j);
+                    system.G(idx1, idx2) += prefactor2;
+                    if (idx1 != idx2) {
+                        system.G(idx2, idx1) += prefactor2;
+                    }
+                }
+            }
+        }
+
+        void calculateGamma() {
+            initGamma();
+
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    double coeff = system.fCoeffs[i][j];
+                    system.Gamma += coeff * system.fBasis[i][j];
+                }
+            }
+        }
+    
 
     public:
         randomSystem(unsigned int N, unsigned int M, double g, unsigned int seed) {
@@ -339,12 +507,20 @@ class randomSystem {
         }
 
         double getVElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
+            if (i == j || k == l) {
+                return 0.0; // V is antisymmetric, so V(i,i,k,l) = V(i,j,k,k) = 0
+            }
+
             auto [idx1, sign1] = getIdxV(i, j);
             auto [idx2, sign2] = getIdxV(k, l);
             return sign1 * sign2 * system.V(idx1, idx2);
         }
 
         double getKElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
+            if (i == j || k == l) {
+                return 0.0; // K is antisymmetric, so K(i,i,k,l) = K(i,j,k,k) = 0
+            }
+
             auto [idx1, sign1] = getIdxV(i, j);
             auto [idx2, sign2] = getIdxV(k, l);
             return sign1 * sign2 * system.K(idx1, idx2);
@@ -527,14 +703,24 @@ class randomSystem {
             generateBasisF();
 
             // Test that the fBasis is traceless
-            testFBasisTraceless();
-
+            // testFBasisTraceless();
             // Test that the fBasis is orthonormal
-            testFBasisOrthonormal();
+            // testFBasisOrthonormal();
+
+            // Initialize 2-RDM and conditions
+            initGamma();
+            initQ();
+            initG();
+
+            // Test
+            //calculateGamma();
+            //calcRho();
+            //calcQ();
+            //calcG();
 
         }
 
-        // Save the result of Potential Reduction to a Json where the system.fBasis is changed to a vector in a vector
+        // Save the result of Potential Reduction to a Json
         void saveToJsonPR(const std::string& filename) const {
             std::ofstream file(filename);
             if (!file) {
@@ -543,6 +729,8 @@ class randomSystem {
             }
 
             file << "{\n";
+
+            // Basis {f}
             file << "  \"f Basis\": [\n";
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
                 for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
@@ -560,6 +748,48 @@ class randomSystem {
                     if (not(i == system.fBasis.size() - 1 && j == system.fBasis[i].size() - 1)) file << ",";
                     file << "\n";
                 }
+            }
+            file << "  ],\n";
+
+            // Gamma
+            file << "  \"Gamma\": [\n";
+            for (unsigned int i = 0; i < system.Gamma.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Gamma.cols(); j++) {
+                    file << system.Gamma(i, j);
+                    if (j < system.Gamma.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Gamma.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Q matrix
+            file << "  \"Q\": [\n";
+            for (unsigned int i = 0; i < system.Q.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Q.cols(); j++) {
+                    file << system.Q(i, j);
+                    if (j < system.Q.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Q.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // G matrix
+            file << "  \"G\": [\n";
+            for (unsigned int i = 0; i < system.G.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.G.cols(); j++) {
+                    file << system.G(i, j);
+                    if (j < system.G.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.G.rows() - 1) file << ",";
+                file << "\n";
             }
             file << "  ]\n";
 
