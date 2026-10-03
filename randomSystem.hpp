@@ -52,12 +52,12 @@ struct System {
     // Representability conditions in f_i basis
     Eigen::MatrixXd Gamma_1;
     std::vector<std::vector<Eigen::MatrixXd>> Gamma_f_i;
-    Eigen::MatrixXd Q_1;
-    std::vector<std::vector<Eigen::MatrixXd>> Q_f_i;
+    Eigen::MatrixXd Qlin_1;
+    std::vector<std::vector<Eigen::MatrixXd>> Qlin_f_i;
     Eigen::MatrixXd G_1;
     std::vector<std::vector<Eigen::MatrixXd>> G_f_i;
-    Eigen::MatrixXd L_1;
-    std::vector<std::vector<Eigen::MatrixXd>> L_f_i;
+    Eigen::MatrixXd Llin_1;
+    std::vector<std::vector<Eigen::MatrixXd>> Llin_f_i;
 };
 
 class randomSystem {
@@ -476,7 +476,7 @@ class randomSystem {
             std::cout << "fBasis is orthonormal." << std::endl;
         }
 
-        double get_fi_element(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd f_i) const {
+        double get_fi_element(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
             if (i == j || k == l) {
                 return 0.0; // f_i is antisymmetric, so f_i(i,i,k,k) = -V(i,i,k,k) = 0
             }
@@ -486,7 +486,7 @@ class randomSystem {
             return sign1 * sign2 * f_i(idx1, idx2);
         }
 
-        double F_ij(unsigned int i, unsigned int j, Eigen::MatrixXd f_i) const {
+        double F_ij(unsigned int i, unsigned int j, Eigen::MatrixXd& f_i) const {
             double result = 0.0;
             for (unsigned int k = 0; k < system.M; k++) {
                 result += get_fi_element(i, k, j, k, f_i);
@@ -497,8 +497,7 @@ class randomSystem {
 
         void generateGamma_1() {
             unsigned int D = system.M * (system.M - 1) / 2;
-            double prefactor = static_cast<double>(system.N * (system.N - 1)) / (2 * D);
-            system.Gamma_1 = Eigen::MatrixXd::Identity(D, D) * prefactor;
+            system.Gamma_1 = Eigen::MatrixXd::Identity(D, D);
 
         }
 
@@ -507,7 +506,7 @@ class randomSystem {
             system.Gamma_f_i = system.fBasis;
         }
 
-        double calcGElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd f_i) {
+        double calcGElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
             double G_ijkl = -get_fi_element(i, l, k, j, f_i);
             if (j == l) {
                 double sum = F_ij(i, k, f_i);
@@ -517,7 +516,7 @@ class randomSystem {
 
         }
 
-        Eigen::MatrixXd calcGf_i(Eigen::MatrixXd f_i) {
+        Eigen::MatrixXd calcGf_i(Eigen::MatrixXd& f_i) const {
             unsigned int D = system.M * system.M;
             Eigen::MatrixXd Gf_i = Eigen::MatrixXd::Zero(D, D);
 
@@ -554,7 +553,7 @@ class randomSystem {
             }
         }
 
-        double calcQElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd f_i) {
+        double calcQlinElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
             if (i == j || k == l) {
                 return 0.0;
             }
@@ -562,7 +561,7 @@ class randomSystem {
             double result = get_fi_element(i, j, k, l, f_i);
 
             if (i == k && j == l) {
-                result += 1 - F_ij(j, l, f_i) - F_ij(i, k, f_i);
+                result += -F_ij(j, l, f_i) - F_ij(i, k, f_i);
             } else if (i == k) {
                 result += -F_ij(j, l, f_i);
             } else if (j == l) {
@@ -570,7 +569,7 @@ class randomSystem {
             }
 
             if (i == l && j == k) {
-                result += -1 + F_ij(j, k, f_i) + F_ij(i, l, f_i);
+                result += F_ij(j, k, f_i) + F_ij(i, l, f_i);
             } else if (i == l) {
                 result += F_ij(j, k, f_i);
             } else if (j == k) {
@@ -580,7 +579,7 @@ class randomSystem {
             return result;
         }
 
-        Eigen::MatrixXd calcQf_i(Eigen::MatrixXd f_i) {
+        Eigen::MatrixXd calcQlinf_i(Eigen::MatrixXd& f_i) const {
             unsigned int D = system.M * (system.M  - 1) / 2;
             Eigen::MatrixXd Qf_i = Eigen::MatrixXd::Zero(D, D);
             for (unsigned int j = 0; j < system.M; j++) {
@@ -590,7 +589,7 @@ class randomSystem {
                         for (unsigned int k = 0; k < l; k++) {
                             auto [idx2, sign2] = getIdxV(k, l);
 
-                            double Q_ijkl = calcQElementf_i(i, j, k, l, f_i);
+                            double Q_ijkl = calcQlinElementf_i(i, j, k, l, f_i);
                             Qf_i(idx1, idx2) = sign1 * sign2 * Q_ijkl;
                         }
                     }
@@ -599,61 +598,67 @@ class randomSystem {
             return Qf_i;
         }
 
-        void generateQ_1() {
+        void generateQlin_1() {
             unsigned int D_I = system.M * (system.M - 1) / 2;
             Eigen::MatrixXd I = Eigen::MatrixXd::Identity(D_I, D_I);
 
-            system.Q_1 = calcQf_i(I);
+            system.Qlin_1 = calcQlinf_i(I);
         }
 
-        void generateQ_f_i() {
-            system.Q_f_i.clear();
-            system.Q_f_i.resize(system.fBasis.size());
+        void generateQlin_f_i() {
+            system.Qlin_f_i.clear();
+            system.Qlin_f_i.resize(system.fBasis.size());
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
-                system.Q_f_i[i].resize(system.fBasis[i].size());
+                system.Qlin_f_i[i].resize(system.fBasis[i].size());
                 for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
-                    system.Q_f_i[i][j] = calcQf_i(system.fBasis[i][j]);
+                    system.Qlin_f_i[i][j] = calcQlinf_i(system.fBasis[i][j]);
                 }
             }
         }
 
-        void generateL_1() {
+        void generateLlin_1() {
             unsigned int dimGamma = system.Gamma_1.rows();
-            unsigned int dimQ = system.Q_1.rows();
+            unsigned int dimQ = system.Qlin_1.rows();
             unsigned int dimG = system.G_1.rows();
 
             unsigned int D = dimGamma + dimQ + dimG;
-            system.L_1 = Eigen::MatrixXd::Zero(D, D);
+            system.Llin_1 = Eigen::MatrixXd::Zero(D, D);
 
-            system.L_1.block(0, 0, dimGamma, dimGamma) = system.Gamma_1;
-            system.L_1.block(dimGamma, dimGamma, dimQ, dimQ) = system.Q_1;
-            system.L_1.block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG) = system.G_1;
+            system.Llin_1.block(0, 0, dimGamma, dimGamma) = system.Gamma_1;
+            system.Llin_1.block(dimGamma, dimGamma, dimQ, dimQ) = system.Qlin_1;
+            system.Llin_1.block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG) = system.G_1;
         }
 
-        void generateL_f_i() {
-            system.L_f_i.clear();
-            system.L_f_i.resize(system.fBasis.size());
+        void generateLlin_f_i() {
+            system.Llin_f_i.clear();
+            system.Llin_f_i.resize(system.fBasis.size());
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
-                system.L_f_i[i].resize(system.fBasis[i].size());
+                system.Llin_f_i[i].resize(system.fBasis[i].size());
                 for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
                     unsigned int dimGamma = system.Gamma_f_i[i][j].rows();
-                    unsigned int dimQ = system.Q_f_i[i][j].rows();
+                    unsigned int dimQ = system.Qlin_f_i[i][j].rows();
                     unsigned int dimG = system.G_f_i[i][j].rows();
 
-                    system.L_f_i[i][j] = Eigen::MatrixXd::Zero(dimGamma + dimQ + dimG, dimGamma + dimQ + dimG);
-                    system.L_f_i[i][j].block(0, 0, dimGamma, dimGamma) = system.Gamma_f_i[i][j];
-                    system.L_f_i[i][j].block(dimGamma, dimGamma, dimQ, dimQ) = system.Q_f_i[i][j];
-                    system.L_f_i[i][j].block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG) = system.G_f_i[i][j];
+                    system.Llin_f_i[i][j] = Eigen::MatrixXd::Zero(dimGamma + dimQ + dimG, dimGamma + dimQ + dimG);
+                    system.Llin_f_i[i][j].block(0, 0, dimGamma, dimGamma) = system.Gamma_f_i[i][j];
+                    system.Llin_f_i[i][j].block(dimGamma, dimGamma, dimQ, dimQ) = system.Qlin_f_i[i][j];
+                    system.Llin_f_i[i][j].block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG) = system.G_f_i[i][j];
                 }
             }
         }
 
         // Calculate L from f basis
         void calcL_f() {
-            system.L = static_cast<double>(system.N * (system.N - 1)) / (system.M * (system.M - 1)) * system.L_1;
+            system.L = static_cast<double>(system.N * (system.N - 1)) / (system.M * (system.M - 1)) * system.Llin_1;
+
+            // add affine part due to Q to L
+            unsigned int dimGamma = system.Gamma_1.rows();
+            unsigned int dimQ = system.Qlin_1.rows();
+            system.L.block(dimGamma, dimGamma, dimQ, dimQ) += Eigen::MatrixXd::Identity(dimQ, dimQ);
+
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
                 for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
-                    system.L += system.fCoeffs[i][j] * system.L_f_i[i][j];
+                    system.L += system.fCoeffs[i][j] * system.Llin_f_i[i][j];
                 }
             }
         }
@@ -930,10 +935,10 @@ class randomSystem {
             generateGamma_f_i();
             generateG_1();
             generateG_f_i();
-            generateQ_1();
-            generateQ_f_i();
-            generateL_1();
-            generateL_f_i();
+            generateQlin_1();
+            generateQlin_f_i();
+            generateLlin_1();
+            generateLlin_f_i();
             calcL_f();
 
         }
