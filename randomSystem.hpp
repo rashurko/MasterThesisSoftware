@@ -58,6 +58,8 @@ struct System {
     std::vector<std::vector<Eigen::MatrixXd>> G_f_i;
     Eigen::MatrixXd Llin_1;
     std::vector<std::vector<Eigen::MatrixXd>> Llin_f_i;
+
+    Eigen::MatrixXd Hessian;
 };
 
 class randomSystem {
@@ -249,6 +251,16 @@ class randomSystem {
             auto [idx1, sign1] = getIdxV(i, j);
             auto [idx2, sign2] = getIdxV(k, l);
             return sign1 * sign2 * system.Gamma(idx1, idx2);
+        }
+
+        double getShortElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& mat) const {
+            if (i == j || k == l) {
+                return 0.0; // V is antisymmetric, so V(i,i,k,l) = V(i,j,k,k) = 0
+            }
+
+            auto [idx1, sign1] = getIdxV(i, j);
+            auto [idx2, sign2] = getIdxV(k, l);
+            return sign1 * sign2 * mat(idx1, idx2);
         }
 
         double calcRhoElement(unsigned int i, unsigned int j) const {
@@ -476,7 +488,7 @@ class randomSystem {
             std::cout << "fBasis is orthonormal." << std::endl;
         }
 
-        double get_fi_element(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
+        double get_fi_element(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& f_i) const {
             if (i == j || k == l) {
                 return 0.0; // f_i is antisymmetric, so f_i(i,i,k,k) = -V(i,i,k,k) = 0
             }
@@ -486,7 +498,7 @@ class randomSystem {
             return sign1 * sign2 * f_i(idx1, idx2);
         }
 
-        double F_ij(unsigned int i, unsigned int j, Eigen::MatrixXd& f_i) const {
+        double F_ij(unsigned int i, unsigned int j, const Eigen::MatrixXd& f_i) const {
             double result = 0.0;
             for (unsigned int k = 0; k < system.M; k++) {
                 result += get_fi_element(i, k, j, k, f_i);
@@ -506,7 +518,7 @@ class randomSystem {
             system.Gamma_f_i = system.fBasis;
         }
 
-        double calcGElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
+        double calcGElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& f_i) const {
             double G_ijkl = -get_fi_element(i, l, k, j, f_i);
             if (j == l) {
                 double sum = F_ij(i, k, f_i);
@@ -516,7 +528,7 @@ class randomSystem {
 
         }
 
-        Eigen::MatrixXd calcGf_i(Eigen::MatrixXd& f_i) const {
+        Eigen::MatrixXd calcGf_i(const Eigen::MatrixXd& f_i) const {
             unsigned int D = system.M * system.M;
             Eigen::MatrixXd Gf_i = Eigen::MatrixXd::Zero(D, D);
 
@@ -533,6 +545,71 @@ class randomSystem {
                 }
             }
             return Gf_i;
+        }
+
+        double calcGAdjElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& mat) const {
+            unsigned int I1 = getGIndex(i, l);
+            unsigned int J1 = getGIndex(k, j);
+            unsigned int I2 = getGIndex(j, l);
+            unsigned int J2 = getGIndex(k, i);
+            unsigned int I3 = getGIndex(i, k);
+            unsigned int J3 = getGIndex(l, j);
+            unsigned int I4 = getGIndex(j, k);
+            unsigned int J4 = getGIndex(l, i);
+            double G_ijkl = (-mat(I1, J1) + mat(I2, J2) + mat(I3, J3) - mat(I4, J4)) / 4;
+
+            double sum = 0.0;
+            if (j == l) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    unsigned int idx1 = getGIndex(i, m);
+                    unsigned int idx2 = getGIndex(k, m);
+                    sum += mat(idx1, idx2);
+                }
+            }
+            if (i == l) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    unsigned int idx1 = getGIndex(j, m);
+                    unsigned int idx2 = getGIndex(k, m);
+                    sum -= mat(idx1, idx2);
+                }
+            }
+            if (j == k) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    unsigned int idx1 = getGIndex(i, m);
+                    unsigned int idx2 = getGIndex(l, m);
+                    sum -= mat(idx1, idx2);
+                }
+            }
+            if (i == k) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    unsigned int idx1 = getGIndex(j, m);
+                    unsigned int idx2 = getGIndex(l, m);
+                    sum -= mat(idx1, idx2);
+                }
+            }
+
+            G_ijkl += sum / (4 * (system.N - 1));
+
+            return G_ijkl;
+        }
+
+        Eigen::MatrixXd calcGAdj(Eigen::MatrixXd& mat) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            Eigen::MatrixXd GAdj = Eigen::MatrixXd::Zero(D, D);
+
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j < i; j++) {
+                    auto [idx1, sign1] = getIdxV(i, j);
+                    for (unsigned int k = 0; k < system.M; k++) {
+                        for (unsigned int l = 0; l < k; l++) {
+                            auto [idx2, sign2] = getIdxV(k, l);
+                            GAdj(idx1, idx2) = calcGAdjElement(i, j, k, l, mat);
+                        }
+                    }
+                }
+            }
+
+            return GAdj;
         }
 
         void generateG_1() {
@@ -553,7 +630,7 @@ class randomSystem {
             }
         }
 
-        double calcQlinElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
+        double calcQlinElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& f_i) const {
             if (i == j || k == l) {
                 return 0.0;
             }
@@ -578,8 +655,9 @@ class randomSystem {
 
             return result;
         }
+        
 
-        Eigen::MatrixXd calcQlinf_i(Eigen::MatrixXd& f_i) const {
+        Eigen::MatrixXd calcQlinf_i(const Eigen::MatrixXd& f_i) const {
             unsigned int D = system.M * (system.M  - 1) / 2;
             Eigen::MatrixXd Qf_i = Eigen::MatrixXd::Zero(D, D);
             for (unsigned int j = 0; j < system.M; j++) {
@@ -596,6 +674,38 @@ class randomSystem {
                 }
             }
             return Qf_i;
+        }
+
+        double calcQlinAdjElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
+            double Q_ijkl = get_fi_element(i, j, k, l, f_i);
+
+            double sum = 0.0;
+            if (j == l) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    sum += get_fi_element(i, m, m, k, f_i) + get_fi_element(m, i, k, m, f_i) - get_fi_element(i, m, k, m, f_i) - get_fi_element(m, i, m, k, f_i);
+                }
+            }
+            Q_ijkl += sum / (system.N - 1);
+            return Q_ijkl;
+        }
+
+        Eigen::MatrixXd calcQlinAdjf_i(Eigen::MatrixXd& f_i) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            Eigen::MatrixXd QAdjf_i = Eigen::MatrixXd::Zero(D, D);
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i < j; i++) {
+                    auto [idx1, sign1] = getIdxV(i, j);
+                    for (unsigned int l = 0; l < system.M; l++) {
+                        for (unsigned int k = 0; k < l; k++) {
+                            auto [idx2, sign2] = getIdxV(k, l);
+
+                            double Q_ijkl = calcQlinAdjElementf_i(i, j, k, l, f_i);
+                            QAdjf_i(idx1, idx2) = sign1 * sign2 * Q_ijkl;
+                        }
+                    }
+                }
+            }
+            return QAdjf_i;
         }
 
         void generateQlin_1() {
@@ -659,6 +769,152 @@ class randomSystem {
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
                 for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
                     system.L += system.fCoeffs[i][j] * system.Llin_f_i[i][j];
+                }
+            }
+        }
+
+        Eigen::MatrixXd shortToFull(Eigen::MatrixXd& matShort) const {
+            unsigned int D = system.M * system.M;
+            Eigen::MatrixXd full = Eigen::MatrixXd::Zero(D, D);
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j < system.M; j++) {
+                    for (unsigned int k = 0; k < system.M; k++) {
+                        for (unsigned int l = 0; l < system.M; l++) {
+                            unsigned int I = getGIndex(i, j);
+                            unsigned int J = getGIndex(k, l);
+                            full(I, J) = getShortElement(i, j, k, l, matShort);
+                        }
+                    }
+                }
+            }
+            return full;
+        }
+
+        Eigen::MatrixXd calcGradBarrier(double t) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            Eigen::MatrixXd gradBarrier = system.K;
+            for (unsigned int k = 0; k < 3; k++) {
+                if (k == 0) {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.Gamma.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
+                    Eigen::MatrixXd Lk_adj = Lk_Gamma_inverse;
+                    gradBarrier -= t * Lk_adj;
+                } else if (k == 1) {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.Q.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
+                    Eigen::MatrixXd Lk_adj = calcQlinf_i(Lk_Gamma_inverse);
+                    gradBarrier -= t * Lk_adj;
+                } else {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.G.ldlt().solve(Eigen::MatrixXd::Identity(system.M * system.M, system.M * system.M));
+                    Eigen::MatrixXd Lk_adj = calcGAdj(Lk_Gamma_inverse);
+                    gradBarrier -= t * Lk_adj;
+                }
+            }
+
+            Eigen::MatrixXd gradBarrierPr = gradBarrier - (gradBarrier.trace() / D) * Eigen::MatrixXd::Identity(D, D);
+
+            return gradBarrierPr;
+
+        }
+
+        Eigen::MatrixXd calcHessianAction(double t, const Eigen::MatrixXd& deltaGamma) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            Eigen::MatrixXd HessianAction = Eigen::MatrixXd::Zero(D, D);
+            for (unsigned int k = 0; k < 3; k++) {
+                // Gamma
+                if (k == 0) {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.Gamma.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
+                    Eigen::MatrixXd Lk_gamma = deltaGamma;
+                    Eigen::MatrixXd Lk_adj = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
+
+                    HessianAction += Lk_adj;
+                // Q
+                } else if (k == 1) {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.Q.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
+                    Eigen::MatrixXd Lk_gamma = calcQlinf_i(deltaGamma);
+                    Eigen::MatrixXd product = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
+                    Eigen::MatrixXd Lk_adj = calcQlinf_i(product);
+
+                    HessianAction += Lk_adj;
+                // G
+                } else {
+                    Eigen::MatrixXd Lk_Gamma_inverse = system.G.ldlt().solve(Eigen::MatrixXd::Identity(system.M * system.M, system.M * system.M));
+                    Eigen::MatrixXd Lk_gamma = calcGf_i(deltaGamma);
+                    Eigen::MatrixXd product = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
+                    Eigen::MatrixXd Lk_adj = calcGAdj(product);
+
+                    HessianAction += Lk_adj;
+                }
+            }
+            // Traceless projection
+            double trace = HessianAction.trace();
+            Eigen::MatrixXd I = Eigen::MatrixXd::Identity(D, D);
+            Eigen::MatrixXd HessianActionPr = HessianAction - (trace / D) * I;
+
+            return t * 0.5 * (HessianActionPr + HessianActionPr.transpose());
+        }
+
+        Eigen::VectorXd solveCG(const Eigen::VectorXd& b, const Eigen::MatrixXd& A, int maxIterations = 1000, double tolerance = 1e-10) {
+            unsigned int k = 0;
+            
+        }
+
+        void initHessian() {
+            unsigned int D = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    D++;
+                }
+            }
+            system.Hessian = Eigen::MatrixXd::Zero(D, D);
+        }
+
+        double calcHessianElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, double t, const Eigen::MatrixXd& L_inverse) const {
+            Eigen::MatrixXd Lf_i = system.Llin_f_i[i][j];
+            Eigen::MatrixXd Lf_j = system.Llin_f_i[k][l];
+
+            Eigen::MatrixXd W_i = L_inverse * Lf_i;
+            Eigen::MatrixXd W_j = L_inverse * Lf_j;
+
+            return t * (W_i.array() * W_j.transpose().array()).sum();
+
+        }
+
+        void calcHessian(double t) {
+            unsigned int dimGamma = system.Gamma_1.rows();
+            unsigned int dimQ = system.Qlin_1.rows();
+            unsigned int dimG = system.G_1.rows();
+            unsigned int D_L = dimGamma + dimQ + dimG;
+
+            Eigen::MatrixXd L_inverse = Eigen::MatrixXd::Zero(D_L, D_L);
+
+            Eigen::MatrixXd L_Gamma = system.L.block(0, 0, dimGamma, dimGamma);
+            Eigen::MatrixXd L_Q     = system.L.block(dimGamma, dimGamma, dimQ, dimQ);
+            Eigen::MatrixXd L_G     = system.L.block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG);
+
+            L_inverse.block(0, 0, dimGamma, dimGamma) = 
+                L_Gamma.ldlt().solve(Eigen::MatrixXd::Identity(dimGamma, dimGamma));
+                
+            L_inverse.block(dimGamma, dimGamma, dimQ, dimQ) = 
+                L_Q.ldlt().solve(Eigen::MatrixXd::Identity(dimQ, dimQ));
+                
+            L_inverse.block(dimGamma + dimQ, dimGamma + dimQ, dimG, dimG) = 
+                L_G.ldlt().solve(Eigen::MatrixXd::Identity(dimG, dimG));
+
+            unsigned int row_index = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    unsigned int col_index = 0;
+                    for (unsigned int k = 0; k < system.fBasis.size(); k++) {
+                        for (unsigned int l = 0; l < system.fBasis[k].size(); l++) {
+                            
+                            if (col_index >= row_index) {
+                                double val = calcHessianElement(i, j, k, l, t, L_inverse);
+                                system.Hessian(row_index, col_index) = val;
+                                system.Hessian(col_index, row_index) = val; 
+                            }
+                            col_index++;
+                        }
+                    }
+                    row_index++;
                 }
             }
         }
@@ -940,6 +1196,8 @@ class randomSystem {
             generateLlin_1();
             generateLlin_f_i();
             calcL_f();
+            initHessian();
+            calcHessian(1);
 
         }
 
@@ -1028,10 +1286,24 @@ class randomSystem {
                 if (i < system.L.rows() - 1) file << ",";
                 file << "\n";
             }
+            file << "  ],\n";
+
+            // Hessian
+            file << "  \"Hessian\": [\n";
+            for (unsigned int i = 0; i < system.Hessian.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Hessian.cols(); j++) {
+                    file << system.Hessian(i, j);
+                    if (j < system.Hessian.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Hessian.rows() - 1) file << ",";
+                file << "\n";
+            }
             file << "  ]\n";
 
             file << "}\n";
-        }
+        }        
 };
 
 
