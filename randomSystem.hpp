@@ -10,6 +10,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
+#include <Eigen/IterativeLinearSolvers>
 
 #include "mathOperations.hpp"
 
@@ -44,9 +45,12 @@ struct System {
 
     // 2-RDM and conditions
     Eigen::MatrixXd Gamma;
+    Eigen::MatrixXd Gamma_inv;
     Eigen::MatrixXd rho;
     Eigen::MatrixXd Q;
+    Eigen::MatrixXd Q_inv;
     Eigen::MatrixXd G;
+    Eigen::MatrixXd G_inv;
     Eigen::MatrixXd L; // Matrix representability conditions 
 
     // Representability conditions in f_i basis
@@ -60,6 +64,11 @@ struct System {
     std::vector<std::vector<Eigen::MatrixXd>> Llin_f_i;
 
     Eigen::MatrixXd Hessian;
+    std::vector<std::vector<Eigen::MatrixXd>> Hessian_f_i;
+    // Conjugate Gradients
+    Eigen::MatrixXd A;
+    Eigen::VectorXd x;
+    Eigen::VectorXd b;
 };
 
 class randomSystem {
@@ -134,7 +143,7 @@ class randomSystem {
                     }
                 }
             }
-            system.K *= 0.5;
+            //system.K *= 0.5;
         }
 
         void generateHMatrix() {
@@ -191,7 +200,7 @@ class randomSystem {
                                     // Are ketNew and braNew equal?
                                     if (ketNew == braNew) {
                                         int sign = pow(-1, countFront(ket, k) + countFront(ket, l) + countFront(bra, m) + countFront(bra, n));
-                                        H_ij += 2 * sign * getKElement(k, l, m, n);
+                                        H_ij += sign * getKElement(k, l, m, n);
                                     }
                                 }
                             }
@@ -326,6 +335,14 @@ class randomSystem {
                 }
             }
         }
+
+        void calcGamma_inv() {
+            system.Gamma_inv = system.Gamma.ldlt().solve(Eigen::MatrixXd::Identity(system.Gamma.rows(), system.Gamma.cols()));
+        }
+
+        void calcQ_inv() {
+            system.Q_inv = system.Q.ldlt().solve(Eigen::MatrixXd::Identity(system.Q.rows(), system.Q.cols()));
+        }
         
         double calcGElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l) const {
             double G_ijkl = -getGammaElement(i, l, k, j);
@@ -349,6 +366,10 @@ class randomSystem {
                     }
                 }
             }
+        }
+
+        void calcG_inv() {
+            system.G_inv = system.G.ldlt().solve(Eigen::MatrixXd::Identity(system.G.rows(), system.G.cols()));
         }
 
         void initGamma() {
@@ -556,7 +577,7 @@ class randomSystem {
             unsigned int J3 = getGIndex(l, j);
             unsigned int I4 = getGIndex(j, k);
             unsigned int J4 = getGIndex(l, i);
-            double G_ijkl = (-mat(I1, J1) + mat(I2, J2) + mat(I3, J3) - mat(I4, J4)) / 4;
+            double G_ijkl = (-mat(I1, J1) + mat(I2, J2) + mat(I3, J3) - mat(I4, J4));
 
             double sum = 0.0;
             if (j == l) {
@@ -584,11 +605,11 @@ class randomSystem {
                 for (unsigned int m = 0; m < system.M; m++) {
                     unsigned int idx1 = getGIndex(j, m);
                     unsigned int idx2 = getGIndex(l, m);
-                    sum -= mat(idx1, idx2);
+                    sum += mat(idx1, idx2);
                 }
             }
 
-            G_ijkl += sum / (4 * (system.N - 1));
+            G_ijkl += sum / ((system.N - 1));
 
             return G_ijkl;
         }
@@ -610,6 +631,32 @@ class randomSystem {
             }
 
             return GAdj;
+        }
+
+        void test_Gadj() const {
+            // Test matrix Y
+            Eigen::MatrixXd Y = Eigen::MatrixXd::Random(system.M * system.M, system.M * system.M);
+
+            // Test for all basis matrices f_i
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    Eigen::MatrixXd f_i = system.fBasis[i][j];
+                    Eigen::MatrixXd G_f_i = calcGf_i(f_i);
+                    Eigen::MatrixXd GAdj_Y = calcGAdj(Y);
+
+                    // Check if the adjoint property holds: <G_f_i, Y> = <f_i, GAdj_Y>
+                    double lhs = (G_f_i.array() * Y.array()).sum();
+                    double rhs = (f_i.array() * GAdj_Y.array()).sum();
+
+                    std::cout<< lhs << " vs " << rhs << std::endl;
+
+                    if (std::abs(lhs - rhs) > 1e-10) {
+                        std::cerr << "Gadj test failed for fBasis[" << i << "][" << j << "]!" << std::endl;
+                        return;
+                    }
+                }
+            }
+            std::cout << "Gadj test passed for all fBasis matrices." << std::endl;
         }
 
         void generateG_1() {
@@ -676,36 +723,23 @@ class randomSystem {
             return Qf_i;
         }
 
-        double calcQlinAdjElementf_i(unsigned int i, unsigned int j, unsigned int k, unsigned int l, Eigen::MatrixXd& f_i) const {
-            double Q_ijkl = get_fi_element(i, j, k, l, f_i);
+        void test_Qadj() const {
+            // Test matrix Y
+            Eigen::MatrixXd Y = Eigen::MatrixXd::Random(system.M * (system.M - 1) / 2, system.M * (system.M - 1) / 2);
 
-            double sum = 0.0;
-            if (j == l) {
-                for (unsigned int m = 0; m < system.M; m++) {
-                    sum += get_fi_element(i, m, m, k, f_i) + get_fi_element(m, i, k, m, f_i) - get_fi_element(i, m, k, m, f_i) - get_fi_element(m, i, m, k, f_i);
+            // Test for all basis matrices f_i
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    Eigen::MatrixXd f_i = system.fBasis[i][j];
+                    Eigen::MatrixXd Qlin_f_i = calcQlinf_i(f_i);
+                    Eigen::MatrixXd QlinAdj_Y = calcQlinf_i(Y);
+
+                    // Check if the adjoint property holds: <Qlin_f_i, Y> = <f_i, QlinAdj_Y>
+                    double lhs = (Qlin_f_i.array() * Y.array()).sum();
+                    double rhs = (f_i.array() * QlinAdj_Y.array()).sum();
+                    std::cout << lhs << " vs " << rhs << std::endl;
                 }
             }
-            Q_ijkl += sum / (system.N - 1);
-            return Q_ijkl;
-        }
-
-        Eigen::MatrixXd calcQlinAdjf_i(Eigen::MatrixXd& f_i) const {
-            unsigned int D = system.M * (system.M - 1) / 2;
-            Eigen::MatrixXd QAdjf_i = Eigen::MatrixXd::Zero(D, D);
-            for (unsigned int j = 0; j < system.M; j++) {
-                for (unsigned int i = 0; i < j; i++) {
-                    auto [idx1, sign1] = getIdxV(i, j);
-                    for (unsigned int l = 0; l < system.M; l++) {
-                        for (unsigned int k = 0; k < l; k++) {
-                            auto [idx2, sign2] = getIdxV(k, l);
-
-                            double Q_ijkl = calcQlinAdjElementf_i(i, j, k, l, f_i);
-                            QAdjf_i(idx1, idx2) = sign1 * sign2 * Q_ijkl;
-                        }
-                    }
-                }
-            }
-            return QAdjf_i;
         }
 
         void generateQlin_1() {
@@ -815,35 +849,100 @@ class randomSystem {
 
         }
 
+        double getMatElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& mat) const {
+            if (i == j || k == l) return 0.0; 
+            auto [idx1, sign1] = getIdxV(i, j);
+            auto [idx2, sign2] = getIdxV(k, l);
+            return sign1 * sign2 * mat(idx1, idx2);
+        }
+
+        // Precalculates the 1-RDM partial trace for a given 2-RDM step
+        Eigen::MatrixXd calcRho_action(const Eigen::MatrixXd& deltaGamma) const {
+            Eigen::MatrixXd deltaRho = Eigen::MatrixXd::Zero(system.M, system.M);
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j <= i; j++) {
+                    double result = 0.0;
+                    for (unsigned int k = 0; k < system.M; k++) {
+                        result += getMatElement(i, k, j, k, deltaGamma);
+                    }
+                    deltaRho(i, j) = result / (system.N - 1);
+                    if (i != j) deltaRho(j, i) = deltaRho(i, j);
+                }
+            }
+            return deltaRho;
+        }
+
+        Eigen::MatrixXd calcQ_action(const Eigen::MatrixXd& deltaGamma, const Eigen::MatrixXd& deltaRho) const {
+            unsigned int D = system.M * (system.M  - 1) / 2;
+            Eigen::MatrixXd Q_action = Eigen::MatrixXd::Zero(D, D);
+            
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i < j; i++) {
+                    auto [idx1, sign1] = getIdxV(i, j);
+                    for (unsigned int l = 0; l < system.M; l++) {
+                        for (unsigned int k = 0; k < l; k++) {
+                            auto [idx2, sign2] = getIdxV(k, l);
+                            
+                            double result = getMatElement(i, j, k, l, deltaGamma);
+
+                            if (i == k && j == l) result += -deltaRho(j, l) - deltaRho(i, k);
+                            else if (i == k)      result += -deltaRho(j, l);
+                            else if (j == l)      result += -deltaRho(i, k);
+
+                            if (i == l && j == k) result += deltaRho(j, k) + deltaRho(i, l);
+                            else if (i == l)      result += deltaRho(j, k);
+                            else if (j == k)      result += deltaRho(i, l);
+
+                            Q_action(idx1, idx2) = sign1 * sign2 * result;
+                        }
+                    }
+                }
+            }
+            return Q_action;
+        }
+
+        Eigen::MatrixXd calcG_action(const Eigen::MatrixXd& deltaGamma, const Eigen::MatrixXd& deltaRho) const {
+            unsigned int D = system.M * system.M;
+            Eigen::MatrixXd G_action = Eigen::MatrixXd::Zero(D, D);
+
+            for (unsigned int i = 0; i < system.M; i++) {
+                for (unsigned int j = 0; j < system.M; j++) {
+                    unsigned int idx1 = getGIndex(i, j);
+                    for (unsigned int k = 0; k < system.M; k++) {
+                        for (unsigned int l = 0; l < system.M; l++) {
+                            unsigned int idx2 = getGIndex(k, l);
+                            
+                            double result = -getMatElement(i, l, k, j, deltaGamma);
+                            if (j == l) result += deltaRho(i, k);
+                            
+                            G_action(idx1, idx2) = result;
+                        }
+                    }
+                }
+            }
+            return G_action;
+        }
+
         Eigen::MatrixXd calcHessianAction(double t, const Eigen::MatrixXd& deltaGamma) const {
             unsigned int D = system.M * (system.M - 1) / 2;
             Eigen::MatrixXd HessianAction = Eigen::MatrixXd::Zero(D, D);
-            for (unsigned int k = 0; k < 3; k++) {
-                // Gamma
-                if (k == 0) {
-                    Eigen::MatrixXd Lk_Gamma_inverse = system.Gamma.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
-                    Eigen::MatrixXd Lk_gamma = deltaGamma;
-                    Eigen::MatrixXd Lk_adj = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
+            
+            // Calculate partial trace ONCE per CG step
+            Eigen::MatrixXd deltaRho = calcRho_action(deltaGamma);
 
-                    HessianAction += Lk_adj;
-                // Q
-                } else if (k == 1) {
-                    Eigen::MatrixXd Lk_Gamma_inverse = system.Q.ldlt().solve(Eigen::MatrixXd::Identity(D, D));
-                    Eigen::MatrixXd Lk_gamma = calcQlinf_i(deltaGamma);
-                    Eigen::MatrixXd product = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
-                    Eigen::MatrixXd Lk_adj = calcQlinf_i(product);
+            // Gamma
+            HessianAction += system.Gamma_inv * deltaGamma * system.Gamma_inv;
+            
+            // Q
+            Eigen::MatrixXd Lk_gamma_Q = calcQ_action(deltaGamma, deltaRho);
+            Eigen::MatrixXd product_Q = system.Q_inv * Lk_gamma_Q * system.Q_inv;
+            HessianAction += calcQ_action(product_Q, calcRho_action(product_Q));
+            
+            // G
+            Eigen::MatrixXd Lk_gamma_G = calcG_action(deltaGamma, deltaRho);
+            Eigen::MatrixXd product_G = system.G_inv * Lk_gamma_G * system.G_inv;
+            HessianAction += calcGAdj(product_G);
 
-                    HessianAction += Lk_adj;
-                // G
-                } else {
-                    Eigen::MatrixXd Lk_Gamma_inverse = system.G.ldlt().solve(Eigen::MatrixXd::Identity(system.M * system.M, system.M * system.M));
-                    Eigen::MatrixXd Lk_gamma = calcGf_i(deltaGamma);
-                    Eigen::MatrixXd product = Lk_Gamma_inverse * Lk_gamma * Lk_Gamma_inverse;
-                    Eigen::MatrixXd Lk_adj = calcGAdj(product);
-
-                    HessianAction += Lk_adj;
-                }
-            }
             // Traceless projection
             double trace = HessianAction.trace();
             Eigen::MatrixXd I = Eigen::MatrixXd::Identity(D, D);
@@ -852,10 +951,224 @@ class randomSystem {
             return t * 0.5 * (HessianActionPr + HessianActionPr.transpose());
         }
 
-        Eigen::VectorXd solveCG(const Eigen::VectorXd& b, const Eigen::MatrixXd& A, int maxIterations = 1000, double tolerance = 1e-10) {
-            unsigned int k = 0;
-            
+        void generateHessian_f_i() {
+            system.Hessian_f_i.clear();
+            system.Hessian_f_i.resize(system.fBasis.size());
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                system.Hessian_f_i[i].resize(system.fBasis[i].size());
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    system.Hessian_f_i[i][j] = calcHessianAction(1, system.fBasis[i][j]);
+                }
+            }
         }
+
+        void generateA(double t) {
+            unsigned int D = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    D++;
+                }
+            }
+            system.A = Eigen::MatrixXd::Zero(D, D);
+
+            unsigned int idx1 = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    
+                    unsigned int idx2 = 0;
+                    for (unsigned int k = 0; k < system.fBasis.size(); k++) {
+                        for (unsigned int l = 0; l < system.fBasis[k].size(); l++) {
+                            system.A(idx1, idx2) = t * (system.fBasis[i][j].array() * system.Hessian_f_i[k][l].array()).sum();
+                            
+                            idx2++;
+                        }
+                    }   
+                    idx1++; 
+                }
+            }
+            system.A = 0.5 * (system.A + system.A.transpose());
+        }
+
+        void generateB(const Eigen::MatrixXd& gradBarrier) {
+            unsigned int D = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                D += system.fBasis[i].size();
+            }
+            system.b = Eigen::VectorXd::Zero(D);
+            unsigned int idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    system.b(idx) = -(system.fBasis[i][j].array() * gradBarrier.array()).sum();
+                    idx++;
+                }
+            }
+        }
+
+        void solveCG(double t, double tol = 1e-6, int max_iter = 1000) {
+            // 1. Initial guess x_0 = 0
+            system.x = Eigen::VectorXd::Zero(system.b.size()); 
+            
+            // 2. Initial residual r_0 = b - A*x_0 = b (since x_0 is 0)
+            Eigen::VectorXd r = system.b; 
+            Eigen::VectorXd p = r;
+            double rsold = r.squaredNorm();
+
+            int iter = 0;
+            for (iter = 0; iter < max_iter; ++iter) {
+                // Matrix-free Hessian-vector product
+                Eigen::VectorXd Ap = applyHessianVector(p, t);
+
+                double pAp = p.dot(Ap);
+                if (pAp <= 0.0) {
+                    std::cerr << "CG Warning: Hessian is not positive definite (pAp = " << pAp << ")." << std::endl;
+                    break; 
+                }
+
+                double alpha = rsold / pAp;
+                system.x += alpha * p;
+                r -= alpha * Ap;
+
+                double rsnew = r.squaredNorm();
+                if (std::sqrt(rsnew) < tol) {
+                    break;
+                }
+
+                p = r + (rsnew / rsold) * p;
+                rsold = rsnew;
+            }
+
+            std::cout << "Custom CG converged in " << iter << " iterations." << std::endl;
+            std::cout << "Approximate error: " << std::sqrt(rsold) << std::endl;
+        }
+
+        Eigen::MatrixXd solveCG_MatrixFree(double t, const Eigen::MatrixXd& gradBarrier, double tol = 1e-6, int max_iter = 1000) {
+            unsigned int D = system.K.rows();
+            
+            // The right-hand side is the negative gradient. 
+            // It is already traceless from calcGradBarrier.
+            Eigen::MatrixXd B_mat = -gradBarrier; 
+
+            // 1. Initial guess X_0 = 0
+            Eigen::MatrixXd X = Eigen::MatrixXd::Zero(D, D);
+            
+            // 2. Initial residual R_0 = B_mat - H(X_0) = B_mat
+            Eigen::MatrixXd R = B_mat;
+            Eigen::MatrixXd P = R;
+            double rsold = (R.array() * R.array()).sum(); // Matrix Frobenius inner product
+
+            int iter = 0;
+            for (iter = 0; iter < max_iter; ++iter) {
+                // Apply Hessian action directly to the matrix P
+                Eigen::MatrixXd AP = calcHessianAction(t, P);
+
+                double pAp = (P.array() * AP.array()).sum();
+                if (pAp <= 0.0) {
+                    std::cerr << "CG Warning: Hessian is not positive definite (pAp = " << pAp << ")." << std::endl;
+                    break; 
+                }
+
+                double alpha = rsold / pAp;
+                X += alpha * P;
+                R -= alpha * AP;
+
+                double rsnew = (R.array() * R.array()).sum();
+                if (std::sqrt(rsnew) < tol) {
+                    break;
+                }
+
+                P = R + (rsnew / rsold) * P;
+                rsold = rsnew;
+            }
+
+            std::cout << "  Matrix-Free CG converged in " << iter << " iterations." << std::endl;
+            return X; // This is directly your deltaGamma!
+        }
+
+        double getAlpha(const double t, const Eigen::MatrixXd& deltaGamma, const double tolerance) const {
+            // Find the eigenvalues of the symmetric eigenvalue problems S_j*x = lambda_j*x
+            // Gamma
+            Eigen::MatrixXd Gamma_deltaGamma = deltaGamma;
+            // Calculate X_Gamma(Gamma) = Gamma^{-1/2} using Eigenvalue decomposition
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_Gamma(system.Gamma);
+            if (solver_Gamma.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing Gamma" << std::endl;
+                return 0.0;
+            }
+            Eigen::MatrixXd X_Gamma = solver_Gamma.operatorInverseSqrt();
+            Eigen::MatrixXd S_Gamma = X_Gamma * Gamma_deltaGamma * X_Gamma;
+            // Calculate the eigenvalues of S_Gamma
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_S_Gamma(S_Gamma);
+            if (solver_S_Gamma.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing S_Gamma" << std::endl;
+                return 0.0;
+            }
+            Eigen::VectorXd eigenvalues_Gamma = solver_S_Gamma.eigenvalues();
+
+            // Q
+            Eigen::MatrixXd Q_deltaGamma = calcQlinf_i(deltaGamma);
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_Q(system.Q);
+            if (solver_Q.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing Q" << std::endl;
+                return 0.0;
+            }
+            Eigen::MatrixXd X_Q = solver_Q.operatorInverseSqrt();
+            Eigen::MatrixXd S_Q = X_Q * Q_deltaGamma * X_Q;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_S_Q(S_Q);
+            if (solver_S_Q.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing S_Q" << std::endl;
+                return 0.0;
+            }
+            Eigen::VectorXd eigenvalues_Q = solver_S_Q.eigenvalues();
+
+            // G
+            Eigen::MatrixXd G_deltaGamma = calcGf_i(deltaGamma);
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_G(system.G);
+            if (solver_G.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing G" << std::endl;
+                return 0.0;
+            }
+            Eigen::MatrixXd X_G = solver_G.operatorInverseSqrt();
+            Eigen::MatrixXd S_G = X_G * G_deltaGamma * X_G;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver_S_G(S_G);
+            if (solver_S_G.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing S_G" << std::endl;
+                return 0.0;
+            }
+            Eigen::VectorXd eigenvalues_G = solver_S_G.eigenvalues();
+
+            // Solve Tr(K * deltaGamma) = t\sum_j (\sum_i lambda_i^j / (1 + alpha * lambda_i^j)) for alpha using the bisection method
+            double alpha_min = 0.0;
+            double alpha_max = 1.0;
+            double alpha = 0.0;
+            double trace_K_deltaGamma = (system.K.array() * deltaGamma.array()).sum();
+            double f_alpha_min = 0.0;
+            double f_alpha_max = 0.0;
+            for (auto eigenvalues : {eigenvalues_Gamma, eigenvalues_Q, eigenvalues_G}) {
+                for (unsigned int i = 0; i < eigenvalues.size(); i++) {
+                    f_alpha_min += eigenvalues(i) / (1.0 + alpha_min * eigenvalues(i));
+                    f_alpha_max += eigenvalues(i) / (1.0 + alpha_max * eigenvalues(i));
+                }
+            }
+
+            while (alpha_max - alpha_min > tolerance) {
+                alpha = 0.5 * (alpha_min + alpha_max);
+                double f_alpha = 0.0;
+                for (auto eigenvalues : {eigenvalues_Gamma, eigenvalues_Q, eigenvalues_G}) {
+                    for (unsigned int i = 0; i < eigenvalues.size(); i++) {
+                        f_alpha += eigenvalues(i) / (1.0 + alpha * eigenvalues(i));
+                    }
+                }
+                if (trace_K_deltaGamma - t * f_alpha > 0) {
+                    alpha_max = alpha;
+                } else {
+                    alpha_min = alpha;
+                }
+            }
+
+            return alpha;
+        }
+
+
 
         void initHessian() {
             unsigned int D = 0;
@@ -1166,7 +1479,33 @@ class randomSystem {
         // -----------------------------------------------
         // SDP
 
-        void performPotentialReduction() {
+        Eigen::VectorXd applyHessianVector(const Eigen::VectorXd& x, double t) const {
+            // 1. Reconstruct DeltaGamma from vector x
+            Eigen::MatrixXd deltaGamma = Eigen::MatrixXd::Zero(system.Gamma.rows(), system.Gamma.cols());
+            unsigned int idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    deltaGamma += x(idx) * system.fBasis[i][j];
+                    idx++;
+                }
+            }
+
+            // 2. Apply Hessian Action (Matrix-Free)
+            Eigen::MatrixXd H_action = calcHessianAction(t, deltaGamma);
+
+            // 3. Project back to vector form
+            Eigen::VectorXd y = Eigen::VectorXd::Zero(x.size());
+            idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    y(idx) = (system.fBasis[i][j].array() * H_action.array()).sum();
+                    idx++;
+                }
+            }
+            return y;
+        }
+
+        void performPotentialReduction(double tInit = 1.0, double tDecay = 0.5, double eps_tol = 1e-4, double duality_gap_tol = 1e-6) {
             // Generate basis for traceless matrices
             generateBasisF();
 
@@ -1177,9 +1516,20 @@ class randomSystem {
 
             // Initialize 2-RDM and conditions
             initGamma();
+            calcGamma_inv();
+            calcRho();
             initQ();
+            calcQ_inv();
             initG();
-            generateL();
+            calcG_inv();
+
+            // Test Qadj
+            // test_Qadj();
+            // return;
+
+            // Test Gadj
+            // test_Gadj();
+            // return;
 
             // Test
             //calculateGamma();
@@ -1187,18 +1537,61 @@ class randomSystem {
             //calcQ();
             //calcG();
 
-            generateGamma_1();
-            generateGamma_f_i();
-            generateG_1();
-            generateG_f_i();
-            generateQlin_1();
-            generateQlin_f_i();
-            generateLlin_1();
-            generateLlin_f_i();
-            calcL_f();
-            initHessian();
-            calcHessian(1);
+            // generateGamma_1();
+            // generateGamma_f_i();
+            // generateG_1();
+            // generateG_f_i();
+            // generateQlin_1();
+            // generateQlin_f_i();
+            // generateLlin_1();
+            // generateLlin_f_i();
+            // calcL_f();
+            // initHessian();
+            // calcHessian(1);
 
+            std::cout << "--- Start Potential Reduction Solver ---" << std::endl;
+            double t = tInit;
+
+            for (unsigned int outer = 0; outer < 100; outer++) {
+                std::cout << "Outer iteration " << outer << " (t = " << t << ")" << std::endl;
+
+                for (unsigned int inner = 0; inner < 100; inner++) {
+                    Eigen::MatrixXd gradBarrier = calcGradBarrier(t);
+                    
+                    if (gradBarrier.norm() < eps_tol) {
+                        break;
+                    }
+
+                    // Solve for deltaGamma directly using the matrix-free CG
+                    Eigen::MatrixXd deltaGamma = solveCG_MatrixFree(t, gradBarrier, 1e-6, 1000);
+
+                    // Get step size and apply update
+                    double alpha = getAlpha(t, deltaGamma, 1e-6); 
+                    system.Gamma += alpha * deltaGamma;
+                    
+                    calcGamma_inv();
+                    calcRho();
+                    calcQ();
+                    calcQ_inv();
+                    calcG();
+                    calcG_inv();
+                }
+
+                double duality_gap = (system.Gamma.rows() + system.Q.rows() + system.G.rows()) * t; // Duality gap = dim(\mathcal{L}) * t
+                std::cout << "Duality gap: " << duality_gap << std::endl;
+                if (duality_gap < duality_gap_tol) {
+                    std::cout << "Duality gap below tolerance, stopping." << std::endl;
+                    break;
+                }
+
+                t *= tDecay;
+
+                double energy = (system.K.array() * system.Gamma.array()).sum();
+                std::cout << "--- Oplossing Gevonden ---" << std::endl;
+                std::cout << "Optimale Grondtoestandsenergie (SDP): " << energy << std::endl;
+            }
+
+            
         }
 
         // Save the result of Potential Reduction to a Json
