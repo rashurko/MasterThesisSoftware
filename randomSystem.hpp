@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <chrono>
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -69,6 +70,12 @@ struct System {
     Eigen::MatrixXd A;
     Eigen::VectorXd x;
     Eigen::VectorXd b;
+
+    double Eground_pr;
+    double duality_gap;
+
+    double durationPr;
+    double durationDiag;
 };
 
 class randomSystem {
@@ -1168,6 +1175,9 @@ class randomSystem {
 
         // Diagonalizes the Hamiltonian H
         void diagonalizeH() {
+            // Timer
+            auto start = std::chrono::high_resolution_clock::now();
+
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(system.H);
             if (solver.info() != Eigen::Success) {
                 std::cerr << "Error diagonalizing Hamiltonian H" << std::endl;
@@ -1178,6 +1188,7 @@ class randomSystem {
 
             // print eigenvalues
             // std::cout << "Exact eigenvalues:\n" << system.exactEnergies << std::endl;
+            system.durationDiag = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         void setTElement(unsigned int i, unsigned int j, double value) {
@@ -1393,7 +1404,10 @@ class randomSystem {
                 if (i < system.dimBasis - 1) file << ",";
                 file << "\n";
             }
-            file << "  ]\n";
+            file << "  ],\n";
+
+            // Save the duration of diagonalization
+            file << "  \"durationDiag\": " << system.durationDiag << "\n";
 
             file << "}\n";
 
@@ -1428,14 +1442,12 @@ class randomSystem {
             return y;
         }
 
-        void performPotentialReduction(double tInit = 1.0, double tDecay = 0.5, double eps_tol = 1e-4, double duality_gap_tol = 1e-6) {
+        void performPotentialReduction(double tInit = 1.0, double tDecay = 0.5, double eps_tol = 1e-3, double duality_gap_tol = 1e-3, std::string logFile = "pr_log.txt") {
+            // Initialize the clock
+            auto start = std::chrono::high_resolution_clock::now();
+
             // Generate basis for traceless matrices
             generateBasisF();
-
-            // Test that the fBasis is traceless
-            // testFBasisTraceless();
-            // Test that the fBasis is orthonormal
-            // testFBasisOrthonormal();
 
             // Initialize 2-RDM and conditions
             initGamma();
@@ -1446,37 +1458,14 @@ class randomSystem {
             initG();
             calcG_inv();
 
-            // Test Qadj
-            // test_Qadj();
-            // return;
 
-            // Test Gadj
-            // test_Gadj();
-            // return;
-
-            // Test
-            //calculateGamma();
-            //calcRho();
-            //calcQ();
-            //calcG();
-
-            // generateGamma_1();
-            // generateGamma_f_i();
-            // generateG_1();
-            // generateG_f_i();
-            // generateQlin_1();
-            // generateQlin_f_i();
-            // generateLlin_1();
-            // generateLlin_f_i();
-            // calcL_f();
-            // initHessian();
-            // calcHessian(1);
-
-            std::cout << "--- Start Potential Reduction Solver ---" << std::endl;
             double t = tInit;
+            std::ofstream log(logFile);
+            log << "--- Start Potential Reduction Solver ---" << std::endl;
 
             for (unsigned int outer = 0; outer < 100; outer++) {
-                std::cout << "Outer iteration " << outer << " (t = " << t << ")" << std::endl;
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+                log << "--- Outer iteration " << outer << " (t = " << t << ", timer=" << elapsed << "s)" << " ---" << std::endl;
 
                 for (unsigned int inner = 0; inner < 100; inner++) {
                     Eigen::MatrixXd gradBarrier = calcGradBarrier(t);
@@ -1501,20 +1490,22 @@ class randomSystem {
                 }
 
                 double duality_gap = (system.Gamma.rows() + system.Q.rows() + system.G.rows()) * t; // Duality gap = dim(\mathcal{L}) * t
-                std::cout << "Duality gap: " << duality_gap << std::endl;
+                log << "Duality gap: " << duality_gap << std::endl;
                 if (duality_gap < duality_gap_tol) {
-                    std::cout << "Duality gap below tolerance, stopping." << std::endl;
+                    log << "Duality gap below tolerance, stopping." << std::endl;
                     break;
                 }
 
                 t *= tDecay;
 
                 double energy = (system.K.array() * system.Gamma.array()).sum();
-                std::cout << "--- Oplossing Gevonden ---" << std::endl;
-                std::cout << "Optimale Grondtoestandsenergie (SDP): " << energy << std::endl;
+                system.Eground_pr = energy;
+                system.duality_gap = duality_gap;
+
+                log << "Ground state energy (SDP): " << energy << std::endl;
             }
 
-            
+            system.durationPr = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         // Save the result of Potential Reduction to a Json
@@ -1590,33 +1581,14 @@ class randomSystem {
             }
             file << "  ],\n";
 
-            // L matrix
-            file << "  \"L\": [\n";
-            for (unsigned int i = 0; i < system.L.rows(); i++) {
-                file << "    [";
-                for (unsigned int j = 0; j < system.L.cols(); j++) {
-                    file << system.L(i, j);
-                    if (j < system.L.cols() - 1) file << ", ";
-                }
-                file << "]";
-                if (i < system.L.rows() - 1) file << ",";
-                file << "\n";
-            }
-            file << "  ],\n";
+            // Ground state energy
+            file << "  \"Ground state energy (SDP)\": " << system.Eground_pr << ",\n";
 
-            // Hessian
-            file << "  \"Hessian\": [\n";
-            for (unsigned int i = 0; i < system.Hessian.rows(); i++) {
-                file << "    [";
-                for (unsigned int j = 0; j < system.Hessian.cols(); j++) {
-                    file << system.Hessian(i, j);
-                    if (j < system.Hessian.cols() - 1) file << ", ";
-                }
-                file << "]";
-                if (i < system.Hessian.rows() - 1) file << ",";
-                file << "\n";
-            }
-            file << "  ]\n";
+            // Duality gap
+            file << "  \"Duality gap\": " << system.duality_gap << ",\n";
+
+            // Duration of Potential Reduction
+            file << "  \"durationPr\": " << system.durationPr << "\n";
 
             file << "}\n";
         }        

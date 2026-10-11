@@ -1,0 +1,38 @@
+--- Start Potential Reduction Solver ---
+--- Outer iteration 0 (t = 1, timer=0.464521s) ---
+Duality gap: 276
+Ground state energy (SDP): -11.0354
+--- Outer iteration 1 (t = 0.5, timer=2.55676s) ---
+Duality gap: 138
+Ground state energy (SDP): -17.3169
+--- Outer iteration 2 (t = 0.25, timer=5.43316s) ---
+Duality gap: 69
+Ground state energy (SDP): -25.204
+--- Outer iteration 3 (t = 0.125, timer=10.5077s) ---
+Duality gap: 34.5
+Ground state energy (SDP): -32.0111
+--- Outer iteration 4 (t = 0.0625, timer=18.9604s) ---
+Duality gap: 17.25
+Ground state energy (SDP): -36.4272
+--- Outer iteration 5 (t = 0.03125, timer=32.158s) ---
+Duality gap: 8.625
+Ground state energy (SDP): -38.8917
+--- Outer iteration 6 (t = 0.015625, timer=52.0893s) ---
+Duality gap: 4.3125
+Ground state energy (SDP): -40.1761
+--- Outer iteration 7 (t = 0.0078125, timer=81.355s) ---
+Duality gap: 2.15625
+Ground state energy (SDP): -40.825
+--- Outer iteration 8 (t = 0.00390625, timer=124.179s) ---
+Duality gap: 1.07812
+Ground state energy (SDP): -41.1491
+--- Outer iteration 9 (t = 0.00195312, timer=186.082s) ---
+Duality gap: 0.539062
+Ground state energy (SDP): -41.311
+--- Outer iteration 10 (t = 0.000976562, timer=273.615s) ---
+Duality gap: 0.269531
+Ground state energy (SDP): -41.3924
+--- Outer iteration 11 (t = 0.000488281, timer=393.747s) ---
+Duality gap: 0.134766
+Ground state energy (SDP): -41.4334
+--- Outer iteration 12 (t = 0.000244141, timer=536.214s) ---
