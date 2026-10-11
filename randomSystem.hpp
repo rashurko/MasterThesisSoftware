@@ -849,97 +849,20 @@ class randomSystem {
 
         }
 
-        double getMatElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& mat) const {
-            if (i == j || k == l) return 0.0; 
-            auto [idx1, sign1] = getIdxV(i, j);
-            auto [idx2, sign2] = getIdxV(k, l);
-            return sign1 * sign2 * mat(idx1, idx2);
-        }
-
-        // Precalculates the 1-RDM partial trace for a given 2-RDM step
-        Eigen::MatrixXd calcRho_action(const Eigen::MatrixXd& deltaGamma) const {
-            Eigen::MatrixXd deltaRho = Eigen::MatrixXd::Zero(system.M, system.M);
-            for (unsigned int i = 0; i < system.M; i++) {
-                for (unsigned int j = 0; j <= i; j++) {
-                    double result = 0.0;
-                    for (unsigned int k = 0; k < system.M; k++) {
-                        result += getMatElement(i, k, j, k, deltaGamma);
-                    }
-                    deltaRho(i, j) = result / (system.N - 1);
-                    if (i != j) deltaRho(j, i) = deltaRho(i, j);
-                }
-            }
-            return deltaRho;
-        }
-
-        Eigen::MatrixXd calcQ_action(const Eigen::MatrixXd& deltaGamma, const Eigen::MatrixXd& deltaRho) const {
-            unsigned int D = system.M * (system.M  - 1) / 2;
-            Eigen::MatrixXd Q_action = Eigen::MatrixXd::Zero(D, D);
-            
-            for (unsigned int j = 0; j < system.M; j++) {
-                for (unsigned int i = 0; i < j; i++) {
-                    auto [idx1, sign1] = getIdxV(i, j);
-                    for (unsigned int l = 0; l < system.M; l++) {
-                        for (unsigned int k = 0; k < l; k++) {
-                            auto [idx2, sign2] = getIdxV(k, l);
-                            
-                            double result = getMatElement(i, j, k, l, deltaGamma);
-
-                            if (i == k && j == l) result += -deltaRho(j, l) - deltaRho(i, k);
-                            else if (i == k)      result += -deltaRho(j, l);
-                            else if (j == l)      result += -deltaRho(i, k);
-
-                            if (i == l && j == k) result += deltaRho(j, k) + deltaRho(i, l);
-                            else if (i == l)      result += deltaRho(j, k);
-                            else if (j == k)      result += deltaRho(i, l);
-
-                            Q_action(idx1, idx2) = sign1 * sign2 * result;
-                        }
-                    }
-                }
-            }
-            return Q_action;
-        }
-
-        Eigen::MatrixXd calcG_action(const Eigen::MatrixXd& deltaGamma, const Eigen::MatrixXd& deltaRho) const {
-            unsigned int D = system.M * system.M;
-            Eigen::MatrixXd G_action = Eigen::MatrixXd::Zero(D, D);
-
-            for (unsigned int i = 0; i < system.M; i++) {
-                for (unsigned int j = 0; j < system.M; j++) {
-                    unsigned int idx1 = getGIndex(i, j);
-                    for (unsigned int k = 0; k < system.M; k++) {
-                        for (unsigned int l = 0; l < system.M; l++) {
-                            unsigned int idx2 = getGIndex(k, l);
-                            
-                            double result = -getMatElement(i, l, k, j, deltaGamma);
-                            if (j == l) result += deltaRho(i, k);
-                            
-                            G_action(idx1, idx2) = result;
-                        }
-                    }
-                }
-            }
-            return G_action;
-        }
-
         Eigen::MatrixXd calcHessianAction(double t, const Eigen::MatrixXd& deltaGamma) const {
             unsigned int D = system.M * (system.M - 1) / 2;
             Eigen::MatrixXd HessianAction = Eigen::MatrixXd::Zero(D, D);
-            
-            // Calculate partial trace ONCE per CG step
-            Eigen::MatrixXd deltaRho = calcRho_action(deltaGamma);
 
             // Gamma
             HessianAction += system.Gamma_inv * deltaGamma * system.Gamma_inv;
             
             // Q
-            Eigen::MatrixXd Lk_gamma_Q = calcQ_action(deltaGamma, deltaRho);
+            Eigen::MatrixXd Lk_gamma_Q = calcQlinf_i(deltaGamma);
             Eigen::MatrixXd product_Q = system.Q_inv * Lk_gamma_Q * system.Q_inv;
-            HessianAction += calcQ_action(product_Q, calcRho_action(product_Q));
+            HessianAction += calcQlinf_i(product_Q);
             
             // G
-            Eigen::MatrixXd Lk_gamma_G = calcG_action(deltaGamma, deltaRho);
+            Eigen::MatrixXd Lk_gamma_G = calcGf_i(deltaGamma);
             Eigen::MatrixXd product_G = system.G_inv * Lk_gamma_G * system.G_inv;
             HessianAction += calcGAdj(product_G);
 
@@ -1081,7 +1004,7 @@ class randomSystem {
             }
 
             std::cout << "  Matrix-Free CG converged in " << iter << " iterations." << std::endl;
-            return X; // This is directly your deltaGamma!
+            return X; 
         }
 
         double getAlpha(const double t, const Eigen::MatrixXd& deltaGamma, const double tolerance) const {
