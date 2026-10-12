@@ -33,7 +33,8 @@ int main() {
         std::cout << "5. Load T and V from csv" << std::endl;
         std::cout << "6. Calculate exact eigenvalues" << std::endl;
         std::cout << "7. Perform Potential Reduction Method" << std::endl;
-        std::cout << "8. Exit" << std::endl;
+        std::cout << "8. Run PR and Exact Diagonalization comparison" << std::endl;
+        std::cout << "9. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -100,6 +101,10 @@ int main() {
                 break;
             }
             case 8: {
+                sys.runExactDiagAndSDPMultiple(5, 1.0, 7, 14, 1);
+                break;
+            }
+            case 9: {
                 running = false;
                 break;
             }

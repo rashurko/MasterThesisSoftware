@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <chrono>
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -35,6 +36,9 @@ struct System {
 
     // Reduced Hamiltonian K
     Eigen::MatrixXd K;
+
+    // 2-RDM
+    Eigen::MatrixXd Gamma_exact;
 
     // ----------------------
     // SDP
@@ -69,6 +73,12 @@ struct System {
     Eigen::MatrixXd A;
     Eigen::VectorXd x;
     Eigen::VectorXd b;
+
+    double Eground_pr;
+    double duality_gap;
+
+    double durationPr;
+    double durationDiag;
 };
 
 class randomSystem {
@@ -213,6 +223,78 @@ class randomSystem {
 
             // print H
             // std::cout << "Matrix H:\n" << system.H << std::endl;
+        }
+
+        void calcExactGammaGroundState() {
+            unsigned int dimGamma = system.M * (system.M - 1) / 2;
+            system.Gamma = Eigen::MatrixXd::Zero(dimGamma, dimGamma);
+            Eigen::VectorXd groundState = system.exactEigenvectors.col(0);
+
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i < j; i++) {
+                    for (unsigned int l = 0; l < system.M; l++) {
+                        for (unsigned int k = 0; k < l; k++) {
+
+                            // Loop over basis states
+                            for (unsigned int m = 0; m < system.dimBasis; m++) {
+                                for (unsigned int n = 0; n < system.dimBasis; n++) {
+                                    auto ket = system.basis[m];
+                                    auto bra = system.basis[n];
+                                    double Cm = groundState[m];
+                                    double Cn = groundState[n];
+                                    double Gamma_ijkl = 0.0;
+
+                                    // Count the number of different elements in eigenstates
+                                    unsigned int diff = 0;
+                                    for (unsigned int idx = 0; idx < system.M; idx++) {
+                                        if (ket[idx] != bra[idx]) {
+                                            diff++;
+                                        }
+                                    }
+
+                                    if (diff > 4) {
+                                        continue;
+                                    }
+
+                                    if (i == j || ket[i] == 0 || ket[j] == 0) {
+                                        continue;
+                                    }
+
+                                    if (k == l || bra[k] == 0 || bra[l] == 0) {
+                                        continue;
+                                    }
+
+                                    auto ketNew = ket;
+                                    auto braNew = bra;
+                                    for (unsigned int p = 0; p < system.M; p++) {
+                                        if (p == i) {
+                                            ketNew[p] -= 1;
+                                        }
+                                        if (p == j) {
+                                            ketNew[p] -= 1;
+                                        }
+                                        if (p == k) {
+                                            braNew[p] -= 1;
+                                        }
+                                        if (p == l) {
+                                            braNew[p] -= 1;
+                                        }
+                                    }
+
+                                    // Are ketNew and braNew equal?
+                                    if (ketNew == braNew) {
+                                        int sign = pow(-1, countFront(ket, i) + countFront(ket, j) + countFront(bra, k) + countFront(bra, l));
+                                        Gamma_ijkl += sign * Cm * Cn;
+                                    }
+                                    auto [idx1, sign1] = getIdxV(i, j);
+                                    auto [idx2, sign2] = getIdxV(k, l);
+                                    system.Gamma(idx1, idx2) += sign1 * sign2 * Gamma_ijkl;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         void generateRandomMatrices() {
@@ -1168,6 +1250,9 @@ class randomSystem {
 
         // Diagonalizes the Hamiltonian H
         void diagonalizeH() {
+            // Timer
+            auto start = std::chrono::high_resolution_clock::now();
+
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(system.H);
             if (solver.info() != Eigen::Success) {
                 std::cerr << "Error diagonalizing Hamiltonian H" << std::endl;
@@ -1178,6 +1263,7 @@ class randomSystem {
 
             // print eigenvalues
             // std::cout << "Exact eigenvalues:\n" << system.exactEnergies << std::endl;
+            system.durationDiag = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         void setTElement(unsigned int i, unsigned int j, double value) {
@@ -1393,7 +1479,10 @@ class randomSystem {
                 if (i < system.dimBasis - 1) file << ",";
                 file << "\n";
             }
-            file << "  ]\n";
+            file << "  ],\n";
+
+            // Save the duration of diagonalization
+            file << "  \"durationDiag\": " << system.durationDiag << "\n";
 
             file << "}\n";
 
@@ -1428,14 +1517,12 @@ class randomSystem {
             return y;
         }
 
-        void performPotentialReduction(double tInit = 1.0, double tDecay = 0.5, double eps_tol = 1e-4, double duality_gap_tol = 1e-6) {
+        void performPotentialReduction(double tInit = 1.0, double tDecay = 0.5, double eps_tol = 1e-3, double duality_gap_tol = 1e-6, std::string logFile = "pr_log.txt") {
+            // Initialize the clock
+            auto start = std::chrono::high_resolution_clock::now();
+
             // Generate basis for traceless matrices
             generateBasisF();
-
-            // Test that the fBasis is traceless
-            // testFBasisTraceless();
-            // Test that the fBasis is orthonormal
-            // testFBasisOrthonormal();
 
             // Initialize 2-RDM and conditions
             initGamma();
@@ -1446,37 +1533,14 @@ class randomSystem {
             initG();
             calcG_inv();
 
-            // Test Qadj
-            // test_Qadj();
-            // return;
 
-            // Test Gadj
-            // test_Gadj();
-            // return;
-
-            // Test
-            //calculateGamma();
-            //calcRho();
-            //calcQ();
-            //calcG();
-
-            // generateGamma_1();
-            // generateGamma_f_i();
-            // generateG_1();
-            // generateG_f_i();
-            // generateQlin_1();
-            // generateQlin_f_i();
-            // generateLlin_1();
-            // generateLlin_f_i();
-            // calcL_f();
-            // initHessian();
-            // calcHessian(1);
-
-            std::cout << "--- Start Potential Reduction Solver ---" << std::endl;
             double t = tInit;
+            std::ofstream log(logFile);
+            log << "--- Start Potential Reduction Solver ---" << std::endl;
 
             for (unsigned int outer = 0; outer < 100; outer++) {
-                std::cout << "Outer iteration " << outer << " (t = " << t << ")" << std::endl;
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+                log << "--- Outer iteration " << outer << " (t = " << t << ", timer=" << elapsed << "s)" << " ---" << std::endl;
 
                 for (unsigned int inner = 0; inner < 100; inner++) {
                     Eigen::MatrixXd gradBarrier = calcGradBarrier(t);
@@ -1501,20 +1565,22 @@ class randomSystem {
                 }
 
                 double duality_gap = (system.Gamma.rows() + system.Q.rows() + system.G.rows()) * t; // Duality gap = dim(\mathcal{L}) * t
-                std::cout << "Duality gap: " << duality_gap << std::endl;
+                log << "Duality gap: " << duality_gap << std::endl;
                 if (duality_gap < duality_gap_tol) {
-                    std::cout << "Duality gap below tolerance, stopping." << std::endl;
+                    log << "Duality gap below tolerance, stopping." << std::endl;
                     break;
                 }
 
                 t *= tDecay;
 
                 double energy = (system.K.array() * system.Gamma.array()).sum();
-                std::cout << "--- Oplossing Gevonden ---" << std::endl;
-                std::cout << "Optimale Grondtoestandsenergie (SDP): " << energy << std::endl;
+                system.Eground_pr = energy;
+                system.duality_gap = duality_gap;
+
+                log << "Ground state energy (SDP): " << energy << std::endl;
             }
 
-            
+            system.durationPr = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         // Save the result of Potential Reduction to a Json
@@ -1590,36 +1656,56 @@ class randomSystem {
             }
             file << "  ],\n";
 
-            // L matrix
-            file << "  \"L\": [\n";
-            for (unsigned int i = 0; i < system.L.rows(); i++) {
-                file << "    [";
-                for (unsigned int j = 0; j < system.L.cols(); j++) {
-                    file << system.L(i, j);
-                    if (j < system.L.cols() - 1) file << ", ";
-                }
-                file << "]";
-                if (i < system.L.rows() - 1) file << ",";
-                file << "\n";
-            }
-            file << "  ],\n";
+            // Ground state energy
+            file << "  \"Ground state energy (SDP)\": " << system.Eground_pr << ",\n";
 
-            // Hessian
-            file << "  \"Hessian\": [\n";
-            for (unsigned int i = 0; i < system.Hessian.rows(); i++) {
-                file << "    [";
-                for (unsigned int j = 0; j < system.Hessian.cols(); j++) {
-                    file << system.Hessian(i, j);
-                    if (j < system.Hessian.cols() - 1) file << ", ";
-                }
-                file << "]";
-                if (i < system.Hessian.rows() - 1) file << ",";
-                file << "\n";
-            }
-            file << "  ]\n";
+            // Duality gap
+            file << "  \"Duality gap\": " << system.duality_gap << ",\n";
+
+            // Duration of Potential Reduction
+            file << "  \"durationPr\": " << system.durationPr << "\n";
 
             file << "}\n";
-        }        
+        }
+        
+        // ----------------------------------------------------------------------------
+        // Comparison of exact diagonalization and SDP
+        void runExactDiagAndSDPMultiple(unsigned int N, double g, unsigned int M_min, unsigned int M_max, unsigned int M_step, std::string outputFileJson = "exactDiagSDPcomparison.json") {
+            std::ofstream file(outputFileJson);
+            if (!file.is_open()) {
+                std::cerr << "Could not open file for writing: " << outputFileJson << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"N\": " << N << ",\n";
+            file << "  \"g\": " << g << ",\n";
+            file << "  \"results\": [\n";
+            for (unsigned int M = M_min; M <= M_max; M += M_step) {
+                randomSystem system(N, M, g, seed);
+                system.generateRandomMatrices();
+                system.diagonalizeH();
+                system.performPotentialReduction();
+
+                file << "    {\n";
+                file << "      \"M\": " << M << ",\n";
+                file << "      \"E_exact\": " << system.system.exactEnergies.minCoeff() << ",\n";
+                file << "      \"E_SDP\": " << system.system.Eground_pr << ",\n";
+                file << "      \"Duality gap\": " << system.system.duality_gap << ",\n";
+                file << "      \"durationDiag\": " << system.system.durationDiag << ",\n";
+                file << "      \"durationPr\": " << system.system.durationPr << "\n";
+                file << "    }";
+                if (M + M_step <= M_max) {
+                    file << ",";
+                }
+                file << "\n";
+
+                file.flush();
+            }
+
+            file << "  ]\n";
+            file << "}\n";
+        }
 };
 
 

@@ -1,0 +1,12 @@
+{
+  "N": 5,
+  "g": 1,
+  "results": [
+    {
+      "M": 7,
+      "E_exact": -3.1939,
+      "E_SDP": -3.1939,
+      "Duality gap": 1.35601e-06,
+      "durationDiag": 0.000930067,
+      "durationPr": 148.116
+    },
