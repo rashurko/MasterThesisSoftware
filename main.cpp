@@ -19,6 +19,9 @@ int main() {
 
     randomSystem sys(N, M, g, seed);
 
+    // Save the system to a JSON file for SDPT3
+    // sys.saveToSDPT3Json("system_SDPT3.json");
+
     // Print the system information
     sys.printSystem();
 
@@ -26,85 +29,68 @@ int main() {
 
     while (running)
     {
-        std::cout << "1. Show T elements" << std::endl;
-        std::cout << "2. Show V elements" << std::endl;
-        std::cout << "3. Change T matrix" << std::endl;
-        std::cout << "4. Change V matrix" << std::endl;
-        std::cout << "5. Load T and V from csv" << std::endl;
-        std::cout << "6. Calculate exact eigenvalues" << std::endl;
-        std::cout << "7. Perform Potential Reduction Method" << std::endl;
-        std::cout << "8. Run PR and Exact Diagonalization comparison" << std::endl;
-        std::cout << "9. Exit" << std::endl;
+        std::cout << "1. Load T and V from csv" << std::endl;
+        std::cout << "2. Calculate exact eigenvalues" << std::endl;
+        std::cout << "3. Perform Potential Reduction Method" << std::endl;
+        std::cout << "4. Run PR and ED comparison" << std::endl;
+        std::cout << "5. Run PR and ED comparison for multiple g values" << std::endl;
+        std::cout << "6. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
 
         switch (choice) {
             case 1: {
-                unsigned int i, j;
-                std::cout << "Enter indices (i, j) for T: ";
-                std::cin >> i >> j;
-                std::cout << "T(" << i << ", " << j << ") = " << sys.getTElement(i, j) << std::endl;
+                sys.loadFromCSV("T_matrix_C4.csv", "V_tensor_flat_C4.csv");
                 break;
             }
             case 2: {
-                unsigned int i, j, k, l;
-                std::cout << "Enter indices (i, j, k, l) for V: ";
-                std::cin >> i >> j >> k >> l;
-                std::cout << "V(" << i << ", " << j << ", " << k << ", " << l << ") = " << sys.getVElement(i, j, k, l) << std::endl;
-                break;
-            }
-            case 3: {
-                for (unsigned int i = 0; i < sys.getM(); i++) {
-                    for (unsigned int j = 0; j < sys.getM(); j++) {
-                        double value;
-                        std::cout << "Enter value for T(" << i << ", " << j << "): ";
-                        std::cin >> value;
-                        sys.setTElement(i, j, value);
-                    }
-                }
-
-                sys.updateKMatrix();
-                sys.updateHMatrix();
-                break;
-            }
-            case 4: {
-                for (unsigned int j = 0; j < sys.getM(); j++) {
-                    for (unsigned int i = 0; i < j; i++) {
-                        for (unsigned int l = 0; l < sys.getM(); l++) {
-                            for (unsigned int k = 0; k < l; k++) {
-                                double value;
-                                std::cout << "Enter value for V(" << i << ", " << j << ", " << k << ", " << l << "): ";
-                                std::cin >> value;
-                                sys.setVElement(i, j, k, l, value);
-                            }
-                        }
-                    }    
-                }
-
-                sys.updateKMatrix();
-                sys.updateHMatrix();
-                break;
-            }
-            case 5: {
-                sys.loadFromCSV("T_matrix.csv", "V_tensor_flat.csv");
-                break;
-            }
-            case 6: {
                 sys.diagonalizeH();
                 sys.saveToJson("exactSol.json");
                 break;
             }
-            case 7: {
+            case 3: {
                 sys.performPotentialReduction();
                 sys.saveToJsonPR("potentialReduction.json");
                 break;
             }
-            case 8: {
-                sys.runExactDiagAndSDPMultiple(5, 1.0, 7, 14, 1);
+            case 4: {
+                // Inputs for the comparison
+                unsigned int M_min;
+                unsigned int M_max;
+                unsigned int M_step;
+                std::cout << "Enter the minimum number of 1p-states (M_min): ";
+                std::cin >> M_min;
+                std::cout << "Enter the maximum number of 1p-states (M_max): ";
+                std::cin >> M_max;
+                std::cout << "Enter the step size for 1p-states (M_step): ";
+                std::cin >> M_step;
+
+                sys.runExactDiagAndSDPMultiple(N, g, M_min, M_max, M_step);
                 break;
             }
-            case 9: {
+            case 5: {
+                // Inputs for the comparison
+                double g_min;
+                double g_max;
+                double n_g;
+                std::cout << "Enter the minimum value of g (g_min): ";
+                std::cin >> g_min;
+                std::cout << "Enter the maximum value of g (g_max): ";
+                std::cin >> g_max;
+                std::cout << "Enter the number of g values (n_g): ";
+                std::cin >> n_g;
+
+                n_g = std::round(n_g);
+                if (n_g < 1) {
+                    std::cerr << "Invalid number of g values." << std::endl;
+                    break;
+                }
+
+                sys.runExactDiagAndSDPMultipleG(N, M, g_min, g_max, n_g);
+                break;
+            }
+            case 6: {
                 running = false;
                 break;
             }

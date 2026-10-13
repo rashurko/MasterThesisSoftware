@@ -227,7 +227,7 @@ class randomSystem {
 
         void calcExactGammaGroundState() {
             unsigned int dimGamma = system.M * (system.M - 1) / 2;
-            system.Gamma = Eigen::MatrixXd::Zero(dimGamma, dimGamma);
+            system.Gamma_exact = Eigen::MatrixXd::Zero(dimGamma, dimGamma);
             Eigen::VectorXd groundState = system.exactEigenvectors.col(0);
 
             for (unsigned int j = 0; j < system.M; j++) {
@@ -288,7 +288,7 @@ class randomSystem {
                                     }
                                     auto [idx1, sign1] = getIdxV(i, j);
                                     auto [idx2, sign2] = getIdxV(k, l);
-                                    system.Gamma(idx1, idx2) += sign1 * sign2 * Gamma_ijkl;
+                                    system.Gamma_exact(idx1, idx2) += sign1 * sign2 * Gamma_ijkl;
                                 }
                             }
                         }
@@ -1264,6 +1264,9 @@ class randomSystem {
             // print eigenvalues
             // std::cout << "Exact eigenvalues:\n" << system.exactEnergies << std::endl;
             system.durationDiag = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
+            // Calcualte 2-RDM from exact eigenvectors
+            calcExactGammaGroundState();
         }
 
         void setTElement(unsigned int i, unsigned int j, double value) {
@@ -1481,6 +1484,20 @@ class randomSystem {
             }
             file << "  ],\n";
 
+            // Save the 2-RDM Gamma
+            file << "  \"Gamma\": [\n";
+            for (unsigned int i = 0; i < system.Gamma_exact.rows(); ++i) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Gamma_exact.cols(); ++j) {
+                    file << system.Gamma_exact(i, j);
+                    if (j < system.Gamma_exact.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Gamma_exact.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
             // Save the duration of diagonalization
             file << "  \"durationDiag\": " << system.durationDiag << "\n";
 
@@ -1550,10 +1567,28 @@ class randomSystem {
                     }
 
                     // Solve for deltaGamma directly using the matrix-free CG
-                    Eigen::MatrixXd deltaGamma = solveCG_MatrixFree(t, gradBarrier, 1e-6, 1000);
+                    Eigen::MatrixXd deltaGamma = solveCG_MatrixFree(t, gradBarrier, 1e-6, 1000000);
 
                     // Get step size and apply update
                     double alpha = getAlpha(t, deltaGamma, 1e-6); 
+
+                    // Check if Gamma, Q and G remain positive semidefinite after the update using cholesky decomposition
+                    Eigen::LLT<Eigen::MatrixXd> llt_Gamma(system.Gamma + alpha * deltaGamma);
+                    Eigen::LLT<Eigen::MatrixXd> llt_Q(system.Q + alpha * calcQlinf_i(deltaGamma));
+                    Eigen::LLT<Eigen::MatrixXd> llt_G(system.G + alpha * calcGf_i(deltaGamma));
+                    while (llt_Gamma.info() != Eigen::Success || llt_Q.info() != Eigen::Success || llt_G.info() != Eigen::Success) {
+                        alpha *= 0.5; // Reduce step size
+                        llt_Gamma.compute(system.Gamma + alpha * deltaGamma);
+                        llt_Q.compute(system.Q + alpha * calcQlinf_i(deltaGamma));
+                        llt_G.compute(system.G + alpha * calcGf_i(deltaGamma));
+
+                        if (alpha < 1e-10) {
+                            alpha = 0.0;
+                            break;
+                        }
+                    }
+                
+
                     system.Gamma += alpha * deltaGamma;
                     
                     calcGamma_inv();
@@ -1689,6 +1724,30 @@ class randomSystem {
 
                 file << "    {\n";
                 file << "      \"M\": " << M << ",\n";
+                file << "      \"Gamma_exact\": [\n";
+                for (unsigned int i = 0; i < system.system.Gamma_exact.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.system.Gamma_exact.cols(); ++j) {
+                        file << system.system.Gamma_exact(i, j);
+                        if (j < system.system.Gamma_exact.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.system.Gamma_exact.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
+                file << "      \"Gamma_SDP\": [\n";
+                for (unsigned int i = 0; i < system.system.Gamma.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.system.Gamma.cols(); ++j) {
+                        file << system.system.Gamma(i, j);
+                        if (j < system.system.Gamma.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.system.Gamma.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
                 file << "      \"E_exact\": " << system.system.exactEnergies.minCoeff() << ",\n";
                 file << "      \"E_SDP\": " << system.system.Eground_pr << ",\n";
                 file << "      \"Duality gap\": " << system.system.duality_gap << ",\n";
@@ -1704,6 +1763,165 @@ class randomSystem {
             }
 
             file << "  ]\n";
+            file << "}\n";
+        }
+
+        // ----------------------------------------------------------------------------
+        // Comparison of exact diagonalization and SDP for a single system with different g values
+        void runExactDiagAndSDPMultipleG(unsigned int N, unsigned int M, double g_min, double g_max, double n_g, std::string outputFileJson = "exactDiagSDPcomparison_g.json") {
+            std::ofstream file(outputFileJson);
+            if (!file.is_open()) {
+                std::cerr << "Could not open file for writing: " << outputFileJson << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"N\": " << N << ",\n";
+            file << "  \"M\": " << M << ",\n";
+            file << "  \"results\": [\n";
+
+            double g_init = system.g; // Store the initial g value to restore later
+
+            for (unsigned int i = 0; i < n_g; ++i) {
+                system.g = g_min + i * (g_max - g_min) / (n_g - 1);
+                // Re-generate H and K matrices with the new g value
+                generateKMatrix();
+                generateHMatrix();
+                diagonalizeH();
+                performPotentialReduction();
+
+                file << "    {\n";
+                file << "      \"g\": " << system.g << ",\n";
+                file << "      \"Gamma_exact\": [\n";
+                for (unsigned int i = 0; i < system.Gamma_exact.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.Gamma_exact.cols(); ++j) {
+                        file << system.Gamma_exact(i, j);
+                        if (j < system.Gamma_exact.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.Gamma_exact.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
+                file << "      \"Gamma_SDP\": [\n";
+                for (unsigned int i = 0; i < system.Gamma.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.Gamma.cols(); ++j) {
+                        file << system.Gamma(i, j);
+                        if (j < system.Gamma.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.Gamma.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
+                file << "      \"E_exact\": " << system.exactEnergies.minCoeff() << ",\n";
+                file << "      \"E_SDP\": " << system.Eground_pr << ",\n";
+                file << "      \"Duality gap\": " << system.duality_gap << ",\n";
+                file << "      \"durationDiag\": " << system.durationDiag << ",\n";
+                file << "      \"durationPr\": " << system.durationPr << "\n";
+                file << "    }";
+                if (i + 1 < n_g) {
+                    file << ",";
+                }
+                file << "\n";
+                file.flush();
+            }
+            file << "\n  ]\n";
+            file << "}\n";
+            file.flush();
+
+            system.g = g_init; // Restore original g value
+        }
+
+        // ----------------------------------------------------------------------------
+        // Export to SDPT3 format
+        void saveToSDPT3Json(const std::string& filename) {
+            std::ofstream file(filename);
+            if (!file) {
+                std::cerr << "Error opening file for writing: " << filename << std::endl;
+                return;
+            }
+
+            generateBasisF();
+
+            // Re-initialize offsets to guarantee purity
+            initGamma(); calcRho(); initQ(); initG();
+
+            // Helper lambda to print matrices
+            auto printMat = [&](const Eigen::MatrixXd& mat) {
+                file << "[\n";
+                for (unsigned int i = 0; i < mat.rows(); i++) {
+                    file << "      [";
+                    for (unsigned int j = 0; j < mat.cols(); j++) {
+                        file << mat(i, j) << (j < mat.cols() - 1 ? ", " : "");
+                    }
+                    file << "]" << (i < mat.rows() - 1 ? "," : "") << "\n";
+                }
+                file << "    ]";
+            };
+
+            file << "{\n";
+
+            // Count total D
+            unsigned int D = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                D += system.fBasis[i].size();
+            }
+
+            // 1. Objective Vector b
+            file << "  \"b\": [\n    ";
+            unsigned int idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    double b_val = -(system.fBasis[i][j].array() * system.K.array()).sum();
+                    file << b_val << (idx < D - 1 ? ", " : "");
+                    idx++;
+                }
+            }
+            file << "\n  ],\n";
+
+            // 2. Constant matrices C
+            file << "  \"C_Gamma\": "; printMat(system.Gamma); file << ",\n";
+            file << "  \"C_Q\": "; printMat(system.Q); file << ",\n";
+            file << "  \"C_G\": "; printMat(system.G); file << ",\n";
+            file << "  \"K_mat\": "; printMat(system.K); file << ",\n";
+
+            // 3. Operator matrices A
+            file << "  \"A_Gamma\": [\n";
+            idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    Eigen::MatrixXd A = -system.fBasis[i][j];
+                    printMat(A); file << (idx < D - 1 ? ",\n" : "\n");
+                    idx++;
+                }
+            }
+            file << "  ],\n";
+
+            file << "  \"A_Q\": [\n";
+            idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    Eigen::MatrixXd A = -calcQlinf_i(system.fBasis[i][j]);
+                    printMat(A); file << (idx < D - 1 ? ",\n" : "\n");
+                    idx++;
+                }
+            }
+            file << "  ],\n";
+
+            file << "  \"A_G\": [\n";
+            idx = 0;
+            for (unsigned int i = 0; i < system.fBasis.size(); i++) {
+                for (unsigned int j = 0; j < system.fBasis[i].size(); j++) {
+                    Eigen::MatrixXd A = -calcGf_i(system.fBasis[i][j]);
+                    printMat(A); file << (idx < D - 1 ? ",\n" : "\n");
+                    idx++;
+                }
+            }
+            file << "  ]\n";
+
             file << "}\n";
         }
 };
