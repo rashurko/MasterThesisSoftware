@@ -32,9 +32,10 @@ int main() {
         std::cout << "1. Load T and V from csv" << std::endl;
         std::cout << "2. Calculate exact eigenvalues" << std::endl;
         std::cout << "3. Perform Potential Reduction Method" << std::endl;
-        std::cout << "4. Run PR and ED comparison" << std::endl;
-        std::cout << "5. Run PR and ED comparison for multiple g values" << std::endl;
-        std::cout << "6. Exit" << std::endl;
+        std::cout << "4. Perform Projection Method" << std::endl;
+        std::cout << "5. Run PR and ED comparison" << std::endl;
+        std::cout << "6. Run PR and ED comparison for multiple g values" << std::endl;
+        std::cout << "7. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -55,6 +56,13 @@ int main() {
                 break;
             }
             case 4: {
+                double alpha = 1e-5;
+                sys.runProjectionMethod(alpha, 1e-3, 1e-3);
+                sys.saveToJsonProjection("projectionMethod.json");
+                break;
+            }
+
+            case 5: {
                 // Inputs for the comparison
                 unsigned int M_min;
                 unsigned int M_max;
@@ -69,7 +77,7 @@ int main() {
                 sys.runExactDiagAndSDPMultiple(N, g, M_min, M_max, M_step);
                 break;
             }
-            case 5: {
+            case 6: {
                 // Inputs for the comparison
                 double g_min;
                 double g_max;
@@ -90,7 +98,7 @@ int main() {
                 sys.runExactDiagAndSDPMultipleG(N, M, g_min, g_max, n_g);
                 break;
             }
-            case 6: {
+            case 7: {
                 running = false;
                 break;
             }
