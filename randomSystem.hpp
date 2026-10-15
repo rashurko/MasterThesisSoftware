@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <chrono>
+#include <unistd.h>
 
 #include <Eigen/Dense>
 #include <Eigen/Eigenvalues>
@@ -77,6 +78,11 @@ struct System {
     double Eground_pr;
     double duality_gap;
 
+    // Projection method
+    double alpha_p;
+    Eigen::MatrixXd Gamma_p;
+
+
     double durationPr;
     double durationDiag;
 };
@@ -101,9 +107,7 @@ class randomSystem {
         }
 
         void generateBasis() {
-            unsigned dimBasis = binomial(system.M, system.N);
-            system.dimBasis = dimBasis;
-            system.basis.reserve(dimBasis);
+            system.basis.reserve(system.dimBasis);
 
             // Initial basis vector
             std::vector<unsigned int> basisVector(system.M, 0);
@@ -310,9 +314,6 @@ class randomSystem {
 
             // print K
             // std::cout << "Matrix K:\n" << system.K << std::endl;
-
-            // Generate the H matrix
-            generateHMatrix();
         }
 
         // Count occupied states before m
@@ -1173,8 +1174,6 @@ class randomSystem {
             return alpha;
         }
 
-
-
         void initHessian() {
             unsigned int D = 0;
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
@@ -1237,19 +1236,80 @@ class randomSystem {
             }
         }
 
+        // --------------------------------------------------------------------------------
+        // Projection method
+        void calcGammaClosest(const double alpha, const Eigen::MatrixXd& K, const double fmu = 1e-3, const double trace_tol = 1e-3) {
+            system.alpha_p = alpha;
+
+            unsigned int D = K.rows();
+            double Trace_Gamma = system.N * (system.N - 1) / 2;
+            system.Gamma_p = Eigen::MatrixXd::Zero(D, D);
+
+            // Calculate the eigenvalues and eigenvectors of alpha^{-1} * K
+            Eigen::MatrixXd Ksc = (1.0 / alpha) * K;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Ksc);
+            if (solver.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing Ksc" << std::endl;
+                return;
+            }
+
+            // Eigenvalues represented as diagonal matrix (and only positve eigenvalues are kept)
+            Eigen::VectorXd eigenvalues = solver.eigenvalues();
+            double maxEigenvalue = eigenvalues.maxCoeff();
+            for (unsigned int i = 0; i < D; i++) {
+                if (eigenvalues(i) < 0) {
+                    eigenvalues(i) = 0;
+                }
+            }
+            Eigen::MatrixXd eigenvectors = solver.eigenvectors();
+
+            // shift = max(abs(eigenvalues)) / 1000
+            double dmu = eigenvalues.maxCoeff() * fmu;
+            double mu = 0.0;
+
+            system.Gamma_p = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
+            //std::cout << "Trace of Gamma_p before projection: " << system.Gamma_p.trace() << std::endl;
+            while (abs(system.Gamma_p.trace() - Trace_Gamma) > trace_tol && mu <= maxEigenvalue && system.Gamma_p.trace() > Trace_Gamma) {
+                eigenvalues -= dmu * Eigen::VectorXd::Ones(D);
+                mu += dmu;
+                // Set any negatively shifted eigenvalues to zero
+                for (unsigned int i = 0; i < D; i++) {
+                    if (eigenvalues(i) < 0) {
+                        eigenvalues(i) = 0;
+                    }
+                }
+
+                //system.Gamma_p = eigenvectors * eigenvalues * eigenvectors.transpose();
+                system.Gamma_p *= (1.0 - dmu/eigenvalues.norm());
+                
+                dmu = eigenvalues.maxCoeff() * fmu;
+
+                // Set a delay for debugging
+                std::cout << "Trace of Gamma_p after projection: " << system.Gamma_p.trace() << ", " << abs(system.Gamma_p.trace() - Trace_Gamma) << std::endl;
+            }
+        }
+
     public:
         randomSystem(unsigned int N, unsigned int M, double g, unsigned int seed) {
             system.N = N;
             system.M = M;
             system.g = g;
             this->seed = seed;
+
+            unsigned dimBasis = binomial(system.M, system.N);
+            system.dimBasis = dimBasis;
+
             initializeRandomNumberGenerator();
-            generateBasis();
             generateRandomMatrices();
         }
 
         // Diagonalizes the Hamiltonian H
         void diagonalizeH() {
+            // Generate the basis for the system
+            generateBasis();
+            // Generate the H matrix
+            generateHMatrix();
+            
             // Timer
             auto start = std::chrono::high_resolution_clock::now();
 
@@ -1403,6 +1463,7 @@ class randomSystem {
             file << "  \"N\": " << system.N << ",\n";
             file << "  \"M\": " << system.M << ",\n";
             file << "  \"g\": " << system.g << ",\n";
+            file << "  \"seed\": " << seed << ",\n";
 
             // Save T matrix
             file << "  \"T\": [\n";
@@ -1539,7 +1600,7 @@ class randomSystem {
             auto start = std::chrono::high_resolution_clock::now();
 
             // Generate basis for traceless matrices
-            generateBasisF();
+            // generateBasisF();
 
             // Initialize 2-RDM and conditions
             initGamma();
@@ -1628,6 +1689,15 @@ class randomSystem {
 
             file << "{\n";
 
+            // N
+            file << "  \"N\": " << system.N << ",\n";
+            // M
+            file << "  \"M\": " << system.M << ",\n";
+            // g
+            file << "  \"g\": " << system.g << ",\n";
+            // seed 
+            file << "  \"seed\": " << seed << ",\n";
+
             // Basis {f}
             file << "  \"f Basis\": [\n";
             for (unsigned int i = 0; i < system.fBasis.size(); i++) {
@@ -1699,6 +1769,66 @@ class randomSystem {
 
             // Duration of Potential Reduction
             file << "  \"durationPr\": " << system.durationPr << "\n";
+
+            file << "}\n";
+        }
+
+        // --------------------------------------------------------------------------
+        // Projection method
+        void runProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
+            calcGammaClosest(alpha, system.K, fmu, trace_tol);
+        }
+
+        void saveToJsonProjection(const std::string& filename) const {
+            std::ofstream file(filename);
+            if (!file) {
+                std::cerr << "Error opening file for writing: " << filename << std::endl;
+                return;
+            }
+
+            file << "{\n";
+
+            // N
+            file << "  \"N\": " << system.N << ",\n";
+            // M
+            file << "  \"M\": " << system.M << ",\n";
+            // g
+            file << "  \"g\": " << system.g << ",\n";
+            // seed 
+            file << "  \"seed\": " << seed << ",\n";
+
+            // Gamma closest
+            file << "  \"Gamma closest\": [\n";
+            for (unsigned int i = 0; i < system.Gamma_p.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Gamma_p.cols(); j++) {
+                    file << system.Gamma_p(i, j);
+                    if (j < system.Gamma_p.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Gamma_p.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // alpha^{-1}K
+            file << "  \"alpha^{-1}K\": [\n";
+            Eigen::MatrixXd Ksc = (1.0 / system.alpha_p) * system.K;
+            for (unsigned int i = 0; i < Ksc.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < Ksc.cols(); j++) {
+                    file << Ksc(i, j);
+                    if (j < Ksc.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < Ksc.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Ground state energy
+            double energy = (system.K.array() * system.Gamma_p.array()).sum();
+            file << "  \"Ground state energy (Projection method)\": " << energy << "\n";
 
             file << "}\n";
         }
