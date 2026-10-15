@@ -1246,7 +1246,11 @@ class randomSystem {
             system.Gamma_p = Eigen::MatrixXd::Zero(D, D);
 
             // Calculate the eigenvalues and eigenvectors of alpha^{-1} * K
-            Eigen::MatrixXd Ksc = (1.0 / alpha) * K;
+            Eigen::MatrixXd Ksc = -(1.0 / alpha) * K;
+            //system.Gamma_p = -Ksc;
+            //return;
+
+
             Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Ksc);
             if (solver.info() != Eigen::Success) {
                 std::cerr << "Error diagonalizing Ksc" << std::endl;
@@ -1268,7 +1272,6 @@ class randomSystem {
             double mu = 0.0;
 
             system.Gamma_p = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
-            //std::cout << "Trace of Gamma_p before projection: " << system.Gamma_p.trace() << std::endl;
             while (abs(system.Gamma_p.trace() - Trace_Gamma) > trace_tol && mu <= maxEigenvalue && system.Gamma_p.trace() > Trace_Gamma) {
                 eigenvalues -= dmu * Eigen::VectorXd::Ones(D);
                 mu += dmu;
@@ -1279,14 +1282,176 @@ class randomSystem {
                     }
                 }
 
-                //system.Gamma_p = eigenvectors * eigenvalues * eigenvectors.transpose();
                 system.Gamma_p *= (1.0 - dmu/eigenvalues.norm());
                 
                 dmu = eigenvalues.maxCoeff() * fmu;
-
-                // Set a delay for debugging
-                std::cout << "Trace of Gamma_p after projection: " << system.Gamma_p.trace() << ", " << abs(system.Gamma_p.trace() - Trace_Gamma) << std::endl;
             }
+            std::cout << "Trace of Gamma_p after projection: " << system.Gamma_p.trace() << ", " << abs(system.Gamma_p.trace() - Trace_Gamma) << std::endl;
+        }
+
+        Eigen::MatrixXd getPsdClosest(const Eigen::MatrixXd& F) const {
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(F);
+            Eigen::VectorXd evals = solver.eigenvalues();
+            
+            // Simply truncate negative eigenvalues to 0 (no shifting/trace matching required)
+            for (unsigned int i = 0; i < evals.size(); i++) {
+                if (evals(i) < 0.0) {
+                    evals(i) = 0.0;
+                }
+            }
+            
+            return solver.eigenvectors() * evals.asDiagonal() * solver.eigenvectors().transpose();
+        }
+
+        Eigen::MatrixXd getFClosest(const Eigen::MatrixXd& F, double Trace_F, const double fmu = 1e-3, const double trace_tol = 1e-3) const {
+            unsigned int D = F.rows();
+
+            // Calculate the eigenvalues and eigenvectors of F
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(F);
+            if (solver.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing F" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+
+            // Eigenvalues represented as diagonal matrix (and only positve eigenvalues are kept)
+            Eigen::VectorXd eigenvalues = solver.eigenvalues();
+            double maxEigenvalue = eigenvalues.maxCoeff();
+            for (unsigned int i = 0; i < D; i++) {
+                if (eigenvalues(i) < 0) {
+                    eigenvalues(i) = 0;
+                }
+            }
+            Eigen::MatrixXd eigenvectors = solver.eigenvectors();
+            Eigen::MatrixXd F_closest = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
+
+            double dmu = eigenvalues.maxCoeff() * fmu;
+            double mu = 0.0;
+            while (abs(F_closest.trace() - Trace_F) > trace_tol && mu <= maxEigenvalue && F_closest.trace() > Trace_F) {
+                eigenvalues -= dmu * Eigen::VectorXd::Ones(D);
+                mu += dmu;
+                // Set any negatively shifted eigenvalues to zero
+                for (unsigned int i = 0; i < D; i++) {
+                    if (eigenvalues(i) < 0) {
+                        eigenvalues(i) = 0;
+                    }
+                }
+
+                F_closest *= (1.0 - dmu/eigenvalues.norm());
+                
+                //dmu = eigenvalues.maxCoeff() * fmu;
+            }
+
+            return F_closest;
+        }        
+
+        Eigen::MatrixXd projectGamma(const Eigen::MatrixXd& Gamma) const {
+            Eigen::MatrixXd FGamma = Gamma;
+            double Trace_FGamma = system.N * (system.N - 1) / 2;
+            Eigen::MatrixXd FGamma_closest = getFClosest(FGamma, Trace_FGamma);
+            return FGamma_closest;
+        }
+
+        // CG Solver for the Q-condition projection
+        Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 100000) const {
+            unsigned int D = B_mat.rows();
+            Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D); // Initial guess Lambda_0 = 0
+            
+            Eigen::MatrixXd R = B_mat; // R_0 = B - L(L_adj(Lambda_0)) = B
+            Eigen::MatrixXd P = R;
+            double rsold = (R.array() * R.array()).sum(); 
+
+            int iter = 0;
+            for (iter = 0; iter < max_iter; ++iter) {
+                // Apply the composite operator: L_Q ( L_Q_adjoint ( P ) )
+                Eigen::MatrixXd P_adj = calcQlinf_i(P);  
+                Eigen::MatrixXd AP = Eigen::MatrixXd::Identity(D, D) + calcQlinf_i(P_adj);
+
+                double pAp = (P.array() * AP.array()).sum();
+                if (pAp <= 1e-16) { 
+                    break; // P is in the null space
+                }
+
+                double alpha = rsold / pAp;
+                Lambda += alpha * P;
+                R -= alpha * AP;
+
+                double rsnew = (R.array() * R.array()).sum();
+                if (std::sqrt(rsnew) < tol) {
+                    break;
+                }
+
+                P = R + (rsnew / rsold) * P;
+                rsold = rsnew;
+            }
+
+            // std::cout << "  CG (Q-Projection) converged in " << iter << " iterations." << std::endl;
+            return Lambda; 
+        }
+
+        Eigen::MatrixXd projectGammaQ(const Eigen::MatrixXd& Gamma) const {
+            unsigned int D = Gamma.rows();
+            Eigen::MatrixXd FQ = Eigen::MatrixXd::Identity(D, D) + calcQlinf_i(Gamma);
+            double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0;
+            Eigen::MatrixXd FQ_closest = getPsdClosest(FQ);
+            
+            // Calculate Lambda using CG
+            Eigen::MatrixXd B_mat = FQ_closest - FQ;
+            Eigen::MatrixXd Lambda = solveCG_Projection_Q(B_mat);
+
+            Eigen::MatrixXd deltaGamma = calcQlinf_i(Lambda);
+
+            Eigen::MatrixXd GammaQ = Gamma + deltaGamma;
+            return GammaQ;
+        }
+
+        // CG Solver for the G-condition projection
+        Eigen::MatrixXd solveCG_Projection_G(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 100000) const {
+            unsigned int D = B_mat.rows();
+            Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D); 
+            
+            Eigen::MatrixXd R = B_mat; 
+            Eigen::MatrixXd P = R;
+            double rsold = (R.array() * R.array()).sum(); 
+
+            int iter = 0;
+            for (iter = 0; iter < max_iter; ++iter) {
+                // Apply the composite operator: L_G ( L_G_adjoint ( P ) )
+                Eigen::MatrixXd P_adj = calcGAdj(P); 
+                Eigen::MatrixXd AP = calcGf_i(P_adj);
+
+                double pAp = (P.array() * AP.array()).sum();
+                if (pAp <= 1e-16) {
+                    break; 
+                }
+
+                double alpha = rsold / pAp;
+                Lambda += alpha * P;
+                R -= alpha * AP;
+
+                double rsnew = (R.array() * R.array()).sum();
+                if (std::sqrt(rsnew) < tol) {
+                    break;
+                }
+
+                P = R + (rsnew / rsold) * P;
+                rsold = rsnew;
+            }
+
+            return Lambda; 
+        }
+
+        Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma) const {
+            Eigen::MatrixXd FG = calcGf_i(Gamma);
+            double Trace_FG = system.N * (system.M - system.N + 1);
+            Eigen::MatrixXd FG_closest = getPsdClosest(FG);
+            
+            Eigen::MatrixXd B_mat = FG_closest - FG;
+            Eigen::MatrixXd Lambda = solveCG_Projection_G(B_mat);
+
+            Eigen::MatrixXd deltaGamma = calcGAdj(Lambda);
+
+            Eigen::MatrixXd GammaG = Gamma + deltaGamma;
+            return GammaG;
         }
 
     public:
@@ -1775,8 +1940,33 @@ class randomSystem {
 
         // --------------------------------------------------------------------------
         // Projection method
-        void runProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
-            calcGammaClosest(alpha, system.K, fmu, trace_tol);
+        void performProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
+            // Calculate Gamma_0
+            //calcGammaClosest(alpha, system.K, fmu, trace_tol);
+            system.alpha_p = alpha;
+            system.Gamma_p = -(1.0 / alpha) * system.K;
+
+            // Halpern alogirthm
+            unsigned int n = 1;
+            Eigen::MatrixXd A = system.Gamma_p;
+            Eigen::MatrixXd D_n = system.Gamma_p;
+            Eigen::MatrixXd D_n_1 = system.Gamma_p;
+            while ((D_n - D_n_1).norm() > 1e-6 || n == 1) {
+                D_n = D_n_1;
+                // Project Gamma_0 onto Q and G
+                Eigen::MatrixXd Gamma = projectGamma(D_n);
+                Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
+                Eigen::MatrixXd Cn = projectGammaG(GammaQ);
+
+                D_n_1 = (1.0 / (n + 1)) * A + (static_cast<double>(n) / static_cast<double>(n + 1)) * Cn;
+
+                // Print energy
+                double energy = (system.K.array() * D_n_1.array()).sum();
+                std::cout << "Iteration " << n << ", Energy: " << energy << std::endl;
+
+                n++;
+            }
+            system.Gamma_p = D_n;
         }
 
         void saveToJsonProjection(const std::string& filename) const {
