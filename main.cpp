@@ -42,7 +42,7 @@ int main() {
 
         switch (choice) {
             case 1: {
-                sys.loadFromCSV("T_matrix_C4.csv", "V_tensor_flat_C4.csv");
+                sys.loadFromCSV("T_matrix.csv", "V_tensor_flat.csv");
                 break;
             }
             case 2: {

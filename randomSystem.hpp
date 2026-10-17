@@ -806,6 +806,42 @@ class randomSystem {
             return Qf_i;
         }
 
+        double calcQAdjElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& mat) const {
+            double sum = 0.0;
+
+            if (j == l) {
+                for (unsigned int m = 0; m < system.M; m++) {
+                    if (i == m || m == k) continue;
+
+                    auto [I, signI] = getIdxV(i, m);
+                    auto [J, signJ] = getIdxV(m, k);
+                    sum += signI * signJ * mat(I, J);
+                }
+                sum *= 4.0 / ((system.N - 1));
+            }
+
+            return sum;
+        }
+
+        Eigen::MatrixXd calcQAdj(const Eigen::MatrixXd& mat) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            Eigen::MatrixXd QAdj = mat;
+
+            for (unsigned int j = 0; j < system.M; j++) {
+                for (unsigned int i = 0; i < j; i++) {
+                    auto [idx1, sign1] = getIdxV(i, j);
+                    for (unsigned int l = 0; l < system.M; l++) {
+                        for (unsigned int k = 0; k < l; k++) {
+                            auto [idx2, sign2] = getIdxV(k, l);
+                            QAdj(idx1, idx2) += calcQAdjElement(i, j, k, l, mat);
+                        }
+                    }
+                }
+            }
+
+            return QAdj; 
+        }
+
         void test_Qadj() const {
             // Test matrix Y
             Eigen::MatrixXd Y = Eigen::MatrixXd::Random(system.M * (system.M - 1) / 2, system.M * (system.M - 1) / 2);
@@ -1240,53 +1276,8 @@ class randomSystem {
         // Projection method
         void calcGammaClosest(const double alpha, const Eigen::MatrixXd& K, const double fmu = 1e-3, const double trace_tol = 1e-3) {
             system.alpha_p = alpha;
-
-            unsigned int D = K.rows();
-            double Trace_Gamma = system.N * (system.N - 1) / 2;
-            system.Gamma_p = Eigen::MatrixXd::Zero(D, D);
-
-            // Calculate the eigenvalues and eigenvectors of alpha^{-1} * K
-            Eigen::MatrixXd Ksc = -(1.0 / alpha) * K;
-            //system.Gamma_p = -Ksc;
-            //return;
-
-
-            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(Ksc);
-            if (solver.info() != Eigen::Success) {
-                std::cerr << "Error diagonalizing Ksc" << std::endl;
-                return;
-            }
-
-            // Eigenvalues represented as diagonal matrix (and only positve eigenvalues are kept)
-            Eigen::VectorXd eigenvalues = solver.eigenvalues();
-            double maxEigenvalue = eigenvalues.maxCoeff();
-            for (unsigned int i = 0; i < D; i++) {
-                if (eigenvalues(i) < 0) {
-                    eigenvalues(i) = 0;
-                }
-            }
-            Eigen::MatrixXd eigenvectors = solver.eigenvectors();
-
-            // shift = max(abs(eigenvalues)) / 1000
-            double dmu = eigenvalues.maxCoeff() * fmu;
-            double mu = 0.0;
-
-            system.Gamma_p = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
-            while (abs(system.Gamma_p.trace() - Trace_Gamma) > trace_tol && mu <= maxEigenvalue && system.Gamma_p.trace() > Trace_Gamma) {
-                eigenvalues -= dmu * Eigen::VectorXd::Ones(D);
-                mu += dmu;
-                // Set any negatively shifted eigenvalues to zero
-                for (unsigned int i = 0; i < D; i++) {
-                    if (eigenvalues(i) < 0) {
-                        eigenvalues(i) = 0;
-                    }
-                }
-
-                system.Gamma_p *= (1.0 - dmu/eigenvalues.norm());
-                
-                dmu = eigenvalues.maxCoeff() * fmu;
-            }
-            std::cout << "Trace of Gamma_p after projection: " << system.Gamma_p.trace() << ", " << abs(system.Gamma_p.trace() - Trace_Gamma) << std::endl;
+            Eigen::MatrixXd alphaK = (1.0 / system.alpha_p) * K;
+            system.Gamma_p = getFClosest(alphaK, system.N * (system.N - 1) / 2);
         }
 
         Eigen::MatrixXd getPsdClosest(const Eigen::MatrixXd& F) const {
@@ -1303,7 +1294,7 @@ class randomSystem {
             return solver.eigenvectors() * evals.asDiagonal() * solver.eigenvectors().transpose();
         }
 
-        Eigen::MatrixXd getFClosest(const Eigen::MatrixXd& F, double Trace_F, const double fmu = 1e-3, const double trace_tol = 1e-3) const {
+        Eigen::MatrixXd getFClosest(const Eigen::MatrixXd& F, double Trace_F, const double bis_tol = 1e-6) const {
             unsigned int D = F.rows();
 
             // Calculate the eigenvalues and eigenvectors of F
@@ -1312,37 +1303,44 @@ class randomSystem {
                 std::cerr << "Error diagonalizing F" << std::endl;
                 exit(EXIT_FAILURE);
             }
+            Eigen::VectorXd evals = solver.eigenvalues();
 
-            // Eigenvalues represented as diagonal matrix (and only positve eigenvalues are kept)
-            Eigen::VectorXd eigenvalues = solver.eigenvalues();
-            double maxEigenvalue = eigenvalues.maxCoeff();
+            double current_trace = 0.0;
             for (unsigned int i = 0; i < D; i++) {
-                if (eigenvalues(i) < 0) {
-                    eigenvalues(i) = 0;
-                }
+                current_trace += std::max(0.0, evals(i));
             }
-            Eigen::MatrixXd eigenvectors = solver.eigenvectors();
-            Eigen::MatrixXd F_closest = eigenvectors * eigenvalues.asDiagonal() * eigenvectors.transpose();
+            if (current_trace <= Trace_F) {
+                return F; 
+            }
 
-            double dmu = eigenvalues.maxCoeff() * fmu;
+            // Bisection method to find mu
+            double mu_min = evals.maxCoeff() - Trace_F; 
+            double mu_max = evals.maxCoeff(); 
             double mu = 0.0;
-            while (abs(F_closest.trace() - Trace_F) > trace_tol && mu <= maxEigenvalue && F_closest.trace() > Trace_F) {
-                eigenvalues -= dmu * Eigen::VectorXd::Ones(D);
-                mu += dmu;
-                // Set any negatively shifted eigenvalues to zero
+
+            while ((mu_max - mu_min) > bis_tol) {
+                mu = 0.5 * (mu_min + mu_max);
+                
+                current_trace = 0.0;
                 for (unsigned int i = 0; i < D; i++) {
-                    if (eigenvalues(i) < 0) {
-                        eigenvalues(i) = 0;
-                    }
+                    current_trace += std::max(0.0, evals(i) - mu);
                 }
 
-                F_closest *= (1.0 - dmu/eigenvalues.norm());
-                
-                //dmu = eigenvalues.maxCoeff() * fmu;
+                if (current_trace > Trace_F) {
+                    mu_min = mu; 
+                } else {
+                    mu_max = mu; 
+                }
             }
 
+            Eigen::VectorXd shifted_evals(D);
+            for (unsigned int i = 0; i < D; i++) {
+                shifted_evals(i) = std::max(0.0, evals(i) - mu);
+            }
+
+            Eigen::MatrixXd F_closest = solver.eigenvectors() * shifted_evals.asDiagonal() * solver.eigenvectors().transpose();
             return F_closest;
-        }        
+        }       
 
         Eigen::MatrixXd projectGamma(const Eigen::MatrixXd& Gamma) const {
             Eigen::MatrixXd FGamma = Gamma;
@@ -1364,7 +1362,7 @@ class randomSystem {
             for (iter = 0; iter < max_iter; ++iter) {
                 // Apply the composite operator: L_Q ( L_Q_adjoint ( P ) )
                 Eigen::MatrixXd P_adj = calcQlinf_i(P);  
-                Eigen::MatrixXd AP = Eigen::MatrixXd::Identity(D, D) + calcQlinf_i(P_adj);
+                Eigen::MatrixXd AP = calcQlinf_i(P_adj);
 
                 double pAp = (P.array() * AP.array()).sum();
                 if (pAp <= 1e-16) { 
@@ -1390,7 +1388,7 @@ class randomSystem {
 
         Eigen::MatrixXd projectGammaQ(const Eigen::MatrixXd& Gamma) const {
             unsigned int D = Gamma.rows();
-            Eigen::MatrixXd FQ = Eigen::MatrixXd::Identity(D, D) + calcQlinf_i(Gamma);
+            Eigen::MatrixXd FQ = calcQlinf_i(Gamma) + Eigen::MatrixXd::Identity(D, D);
             double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0;
             Eigen::MatrixXd FQ_closest = getPsdClosest(FQ);
             
@@ -1614,7 +1612,7 @@ class randomSystem {
             
             // 4. Rebuild K and H with the newly loaded physics
             generateKMatrix();
-            generateHMatrix();
+            //generateHMatrix();
         }
 
         void saveToJson(const std::string& filename) const {
@@ -1951,7 +1949,7 @@ class randomSystem {
             Eigen::MatrixXd A = system.Gamma_p;
             Eigen::MatrixXd D_n = system.Gamma_p;
             Eigen::MatrixXd D_n_1 = system.Gamma_p;
-            while ((D_n - D_n_1).norm() > 1e-6 || n == 1) {
+            while ((D_n - D_n_1).norm() > 1e-10 || n == 1) {
                 D_n = D_n_1;
                 // Project Gamma_0 onto Q and G
                 Eigen::MatrixXd Gamma = projectGamma(D_n);
