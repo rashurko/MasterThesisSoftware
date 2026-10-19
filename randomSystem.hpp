@@ -1309,9 +1309,9 @@ class randomSystem {
             for (unsigned int i = 0; i < D; i++) {
                 current_trace += std::max(0.0, evals(i));
             }
-            if (current_trace <= Trace_F) {
-                return F; 
-            }
+            // if (current_trace <= Trace_F) {
+            //     return F; 
+            // }
 
             // Bisection method to find mu
             double mu_min = evals.maxCoeff() - Trace_F; 
@@ -1350,7 +1350,7 @@ class randomSystem {
         }
 
         // CG Solver for the Q-condition projection
-        Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 100000) const {
+        Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 1000000) const {
             unsigned int D = B_mat.rows();
             Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D); // Initial guess Lambda_0 = 0
             
@@ -1359,10 +1359,19 @@ class randomSystem {
             double rsold = (R.array() * R.array()).sum(); 
 
             int iter = 0;
+            int restart_interval = 10000;
             for (iter = 0; iter < max_iter; ++iter) {
+                if (iter > 0 && iter % restart_interval == 0) {
+                    // Recalculate exact residual: R = B - L(L_adj(Lambda))
+                    Eigen::MatrixXd Lambda_adj = calcQlinf_i(Lambda); 
+                    Eigen::MatrixXd A_Lambda = calcQlinf_i(Lambda_adj) + Eigen::MatrixXd::Identity(D, D); 
+                    R = B_mat - A_Lambda;
+                    P = R;
+                    rsold = (R.array() * R.array()).sum();
+                }
                 // Apply the composite operator: L_Q ( L_Q_adjoint ( P ) )
-                Eigen::MatrixXd P_adj = calcQlinf_i(P);  
-                Eigen::MatrixXd AP = calcQlinf_i(P_adj);
+                Eigen::MatrixXd P_adj = calcQlinf_i(P);
+                Eigen::MatrixXd AP = calcQlinf_i(P_adj) + Eigen::MatrixXd::Identity(D, D);
 
                 double pAp = (P.array() * AP.array()).sum();
                 if (pAp <= 1e-16) { 
@@ -1382,7 +1391,7 @@ class randomSystem {
                 rsold = rsnew;
             }
 
-            // std::cout << "  CG (Q-Projection) converged in " << iter << " iterations." << std::endl;
+            std::cout << "  CG (Q-Projection) converged in " << iter << " iterations." << std::endl;
             return Lambda; 
         }
 
@@ -1390,7 +1399,7 @@ class randomSystem {
             unsigned int D = Gamma.rows();
             Eigen::MatrixXd FQ = calcQlinf_i(Gamma) + Eigen::MatrixXd::Identity(D, D);
             double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0;
-            Eigen::MatrixXd FQ_closest = getPsdClosest(FQ);
+            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ);
             
             // Calculate Lambda using CG
             Eigen::MatrixXd B_mat = FQ_closest - FQ;
@@ -1403,7 +1412,7 @@ class randomSystem {
         }
 
         // CG Solver for the G-condition projection
-        Eigen::MatrixXd solveCG_Projection_G(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 100000) const {
+        Eigen::MatrixXd solveCG_Projection_G(const Eigen::MatrixXd& B_mat, double tol = 1e-6, int max_iter = 1000000) const {
             unsigned int D = B_mat.rows();
             Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D); 
             
@@ -1418,6 +1427,8 @@ class randomSystem {
                 Eigen::MatrixXd AP = calcGf_i(P_adj);
 
                 double pAp = (P.array() * AP.array()).sum();
+                //std::cout << "pAp: " << pAp << std::endl;
+
                 if (pAp <= 1e-16) {
                     break; 
                 }
@@ -1427,6 +1438,7 @@ class randomSystem {
                 R -= alpha * AP;
 
                 double rsnew = (R.array() * R.array()).sum();
+                //std::cout << "rsnew: " << rsnew << std::endl;
                 if (std::sqrt(rsnew) < tol) {
                     break;
                 }
@@ -1434,14 +1446,14 @@ class randomSystem {
                 P = R + (rsnew / rsold) * P;
                 rsold = rsnew;
             }
-
+            std::cout << "  CG (G-Projection) converged in " << iter << " iterations." << std::endl;
             return Lambda; 
         }
 
         Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma) const {
             Eigen::MatrixXd FG = calcGf_i(Gamma);
             double Trace_FG = system.N * (system.M - system.N + 1);
-            Eigen::MatrixXd FG_closest = getPsdClosest(FG);
+            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG);
             
             Eigen::MatrixXd B_mat = FG_closest - FG;
             Eigen::MatrixXd Lambda = solveCG_Projection_G(B_mat);
@@ -1949,18 +1961,20 @@ class randomSystem {
             Eigen::MatrixXd A = system.Gamma_p;
             Eigen::MatrixXd D_n = system.Gamma_p;
             Eigen::MatrixXd D_n_1 = system.Gamma_p;
-            while ((D_n - D_n_1).norm() > 1e-10 || n == 1) {
+            while ((D_n - D_n_1).norm() > 1e-6 || n == 1) {
                 D_n = D_n_1;
                 // Project Gamma_0 onto Q and G
                 Eigen::MatrixXd Gamma = projectGamma(D_n);
-                Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
-                Eigen::MatrixXd Cn = projectGammaG(GammaQ);
+                // Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
+                // Eigen::MatrixXd Cn = projectGammaG(GammaQ);
+                Eigen::MatrixXd GammaG = projectGammaG(Gamma);
+                Eigen::MatrixXd Cn = projectGammaQ(GammaG);
 
                 D_n_1 = (1.0 / (n + 1)) * A + (static_cast<double>(n) / static_cast<double>(n + 1)) * Cn;
 
                 // Print energy
                 double energy = (system.K.array() * D_n_1.array()).sum();
-                std::cout << "Iteration " << n << ", Energy: " << energy << std::endl;
+                std::cout << "Iteration " << n << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
 
                 n++;
             }
