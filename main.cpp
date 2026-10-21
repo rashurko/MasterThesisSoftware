@@ -56,8 +56,8 @@ int main() {
                 break;
             }
             case 4: {
-                double alpha = 1e-3;
-                sys.performProjectionMethod(alpha, 1e-4, 1e-3);
+                double alpha = 1e-2;
+                sys.performProjectionMethod_Dykstra(alpha, 1e-3, 1e-3);
                 sys.saveToJsonProjection("projectionMethod.json");
                 break;
             }
