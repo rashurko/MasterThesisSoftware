@@ -110,6 +110,7 @@ class randomSystem {
         }
 
         void generateBasis() {
+            system.basis.clear();
             system.basis.reserve(system.dimBasis);
 
             // Initial basis vector
@@ -910,7 +911,7 @@ class randomSystem {
                     for (unsigned int l = 0; l < system.M; l++) {
                         for (unsigned int k = 0; k < l; k++) {
                             auto [idx2, sign2] = getIdxV(k, l);
-                            QAdj(idx1, idx2) -= calcQAdjElement(i, j, k, l, mat);
+                            QAdj(idx1, idx2) += sign1 * sign2 * calcQAdjElement(i, j, k, l, mat);
                         }
                     }
                 }
@@ -1505,7 +1506,7 @@ class randomSystem {
             unsigned int D = Gamma.rows();
             Eigen::MatrixXd FQ = calcQf_i(Gamma); 
             double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0; // Target trace for Q-condition
-            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ); // Project FQ onto the PSD cone
+            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ);
             
             // Calculate Lambda using CG
             Eigen::MatrixXd B_mat = FQ_closest - FQ;
@@ -1527,7 +1528,7 @@ class randomSystem {
         Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma) const {
             Eigen::MatrixXd FG = calcGf_i(Gamma);
             double Trace_FG = system.N * (system.M - system.N + 1);
-            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG);
+            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG); 
 
             double trace_FG_closest = FG_closest.trace();
             std::cout << "Trace of FG_closest: " << trace_FG_closest << std::endl;
@@ -2043,9 +2044,9 @@ class randomSystem {
 
         // --------------------------------------------------------------------------
         // Projection method
-        void performProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
-            // Calculate Gamma_0
-            //calcGammaClosest(alpha, system.K, fmu, trace_tol);
+        void performProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, std::string logFile = "projection_log.txt") {
+            auto start = std::chrono::high_resolution_clock::now();
+
             system.alpha_p = alpha;
             system.Gamma_p = -(1.0 / alpha) * system.K;
 
@@ -2054,27 +2055,31 @@ class randomSystem {
             Eigen::MatrixXd A = system.Gamma_p;
             Eigen::MatrixXd D_n = system.Gamma_p;
             Eigen::MatrixXd D_n_1 = system.Gamma_p;
+
+            std::ofstream log(logFile);
+            log << "--- Start Halpern's Projection Method ---" << std::endl;
+
             while ((D_n - D_n_1).norm() > 1e-6 || n == 1) {
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
                 D_n = D_n_1;
                 // Project Gamma_0 onto Q and G
                 Eigen::MatrixXd Gamma = projectGamma(D_n);
                 Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
                 Eigen::MatrixXd Cn = projectGammaG(GammaQ);
-                // Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
-                // Eigen::MatrixXd Cn = GammaQ;
-                //Eigen::MatrixXd Cn = projectGammaG(GammaQ);
-                // Eigen::MatrixXd GammaG = projectGammaG(Gamma);
-                // Eigen::MatrixXd Cn = projectGammaQ(GammaG);
 
                 D_n_1 = (1.0 / (n + 1)) * A + (static_cast<double>(n) / static_cast<double>(n + 1)) * Cn;
 
                 // Print energy
                 double energy = (system.K.array() * D_n_1.array()).sum();
                 std::cout << "Iteration " << n << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
+                log << "Iteration " << n << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
 
                 n++;
             }
             system.Gamma_p = D_n_1;
+            system.Eground_proj = (system.K.array() * system.Gamma_p.array()).sum();
+            system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         void performProjectionMethod_Dykstra(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, std::string logFile = "projectionDykstra_log.txt") {
@@ -2095,7 +2100,7 @@ class randomSystem {
             log << "--- Start Dykstra's Projection Method ---" << std::endl;
 
             unsigned int i = 0;
-            while ((D_n - D_n_1).norm() > 1e-5 || i == 0) {
+            while ((D_n - D_n_1).norm() > 1e-6 || i == 0) {
                 double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
 
                 D_n = D_n_1;
@@ -2105,12 +2110,12 @@ class randomSystem {
                 D_n_1 = projectGamma(C);
                 X_Gamma = D_n_1 - C;
 
-                // Q projection
+                // // Q projection
                 C = D_n_1 - X_Q;
                 D_n_1 = projectGammaQ(C);
                 X_Q = D_n_1 - C;
 
-                // G projection
+                // // G projection
                 C = D_n_1 - X_G;
                 D_n_1 = projectGammaG(C);
                 X_G = D_n_1 - C;
@@ -2291,7 +2296,6 @@ class randomSystem {
                 system.g = g_min + i * (g_max - g_min) / (n_g - 1);
                 // Re-generate H and K matrices with the new g value
                 generateKMatrix();
-                generateHMatrix();
                 diagonalizeH();
                 performPotentialReduction();
                 performProjectionMethod_Dykstra(alpha);
