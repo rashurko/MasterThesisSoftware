@@ -872,6 +872,11 @@ class randomSystem {
             return Qf_i;
         }
 
+        Eigen::MatrixXd calcQ_affine(const Eigen::MatrixXd& Gamma) const {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            return Eigen::MatrixXd::Identity(D, D) + calcQlinf_i(Gamma);
+        }
+
         double calcQAdjElement(unsigned int i, unsigned int j, unsigned int k, unsigned int l, const Eigen::MatrixXd& mat) const {
             double sum = 0.0;
 
@@ -1496,7 +1501,8 @@ class randomSystem {
 
             if (n_iter >= max_iter || !std::isfinite(R_norm) || R_norm > tol) {
                 std::cerr << "Warning: Practical CG (G-Projection) reached maximum iterations without convergence." << std::endl;
-                return Eigen::MatrixXd::Zero(D, D); // Return zero matrix to indicate failure
+                unsigned int D_AdjLambda = GAdjLambda.rows();
+                return Eigen::MatrixXd::Zero(D_AdjLambda, D_AdjLambda); // Return zero matrix to indicate failure
             }
 
             return GAdjLambda;
@@ -2357,6 +2363,51 @@ class randomSystem {
             file.flush();
 
             system.g = g_init; // Restore original g value
+        }
+
+        void runProjectionMethodMultipleAlphas(unsigned int N, unsigned int M, double g, double alpha_min, double alpha_max, unsigned int n_alpha, std::string outputFileJson = "projectionMethodMultipleAlphas.json") {
+            std::ofstream file(outputFileJson);
+            if (!file.is_open()) {
+                std::cerr << "Could not open file for writing: " << outputFileJson << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"N\": " << N << ",\n";
+            file << "  \"M\": " << M << ",\n";
+            file << "  \"g\": " << g << ",\n";
+            file << "  \"results\": [\n";
+
+            for (unsigned int i = 0; i < n_alpha; ++i) {
+                double alpha = alpha_min + i * (alpha_max - alpha_min) / (n_alpha - 1);
+                performProjectionMethod_Dykstra(alpha);
+
+                file << "    {\n";
+                file << "      \"alpha\": " << alpha << ",\n";
+                file << "      \"Gamma_proj\": [\n";
+                for (unsigned int j = 0; j < system.Gamma_p.rows(); ++j) {
+                    file << "        [";
+                    for (unsigned int k = 0; k < system.Gamma_p.cols(); ++k) {
+                        file << system.Gamma_p(j, k);
+                        if (k < system.Gamma_p.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (j < system.Gamma_p.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
+                file << "      \"E_proj\": " << system.Eground_proj << ",\n";
+                file << "      \"durationProj\": " << system.durationProj << "\n";
+                file << "    }";
+                if (i + 1 < n_alpha) {
+                    file << ",";
+                }
+                file << "\n";
+                file.flush();
+            }
+
+            file << "\n  ]\n";
+            file << "}\n";
         }
 
         // ----------------------------------------------------------------------------

@@ -35,7 +35,8 @@ int main() {
         std::cout << "4. Perform Projection Method" << std::endl;
         std::cout << "5. Run PR and ED comparison" << std::endl;
         std::cout << "6. Run PR and ED comparison for multiple g values" << std::endl;
-        std::cout << "7. Exit" << std::endl;
+        std::cout << "7. Run Projection Method for multiple alpha values" << std::endl;
+        std::cout << "8. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -99,6 +100,27 @@ int main() {
                 break;
             }
             case 7: {
+                // Inputs for the comparison
+                double alpha_min;
+                double alpha_max;
+                double n_alpha;
+                std::cout << "Enter the minimum value of alpha (alpha_min): ";
+                std::cin >> alpha_min;
+                std::cout << "Enter the maximum value of alpha (alpha_max): ";
+                std::cin >> alpha_max;
+                std::cout << "Enter the number of alpha values (n_alpha): ";
+                std::cin >> n_alpha;
+
+                n_alpha = std::round(n_alpha);
+                if (n_alpha < 1) {
+                    std::cerr << "Invalid number of alpha values." << std::endl;
+                    break;
+                }
+
+                sys.runProjectionMethodMultipleAlphas(N, M, g, alpha_min, alpha_max, n_alpha);
+                break;
+            }
+            case 8: {
                 running = false;
                 break;
             }
