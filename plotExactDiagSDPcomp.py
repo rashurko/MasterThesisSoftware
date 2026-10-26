@@ -115,7 +115,49 @@ def plotEnergiesG(input_file="exactDiagSDPcomparison_g.json", output_file="exact
     plt.savefig(output_file)
     plt.close()
 
+# Plots the norms Gamma_exact - Gamma_SDP and Gamma_exact - Gamma_proj as a function of M for fixed N and g
+def plotDiffNorm(input_file="exactDiagSDPcomparison.json", output_file="exactSDPdiffNorm.png"):
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+
+    N = data['N']
+    g = data['g']
+    results = data['results']
+
+    M_vals = []
+    norm_exact_SDP_vals = []
+    norm_exact_proj_vals = []
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    for result in results:
+        M = result['M']
+
+        # Calculate the norms out of Gamma matrices
+        Gamma_exact = np.array(result['Gamma_exact'])
+        Gamma_SDP = np.array(result['Gamma_SDP'])
+        norm_exact_SDP = np.linalg.norm(Gamma_exact - Gamma_SDP)
+
+        Gamma_proj = np.array(result.get('Gamma_proj', np.zeros_like(Gamma_exact)))  # Use zeros if Gamma_proj is not available
+        norm_exact_proj = np.linalg.norm(Gamma_exact - Gamma_proj)
+
+        M_vals.append(M)
+        norm_exact_SDP_vals.append(norm_exact_SDP)
+        norm_exact_proj_vals.append(norm_exact_proj)
+
+    ax.plot(M_vals, norm_exact_SDP_vals, linestyle='--', color='black', marker='x', label=r'||$\Gamma_{exact} - \Gamma_{SDP}$||')
+    ax.plot(M_vals, norm_exact_proj_vals, linestyle='-.', color='black', marker='s', label=r'||$\Gamma_{exact} - \Gamma_{proj}$||')
+
+    ax.set_xlabel('M', fontsize=14)
+    ax.set_ylabel('Norm Difference', fontsize=14)
+    ax.set_title(f'Norm Differences: Exact Diagonalization vs SDP vs Projection for N={N}, g={g}', fontsize=16)
+    ax.legend(fontsize=12)
+
+    plt.savefig(output_file)
+    plt.close()
+
 
 plotEnergies()
 plotCompTime()
 plotEnergiesG()
+plotDiffNorm()
