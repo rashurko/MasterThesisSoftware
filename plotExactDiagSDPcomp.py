@@ -13,6 +13,7 @@ def plotEnergies(input_file="exactDiagSDPcomparison.json", output_file="exactSDP
     M_vals = []
     E_exact_vals = []
     E_SDP_vals = []
+    E_proj_vals = []
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -24,13 +25,15 @@ def plotEnergies(input_file="exactDiagSDPcomparison.json", output_file="exactSDP
         M_vals.append(M)
         E_exact_vals.append(E_exact)
         E_SDP_vals.append(E_SDP)
+        E_proj_vals.append(result.get('E_proj', np.nan))  # Use NaN if E_proj is not available
 
     ax.plot(M_vals, E_exact_vals, linestyle='-', color='black', marker='o', label='ED')
     ax.plot(M_vals, E_SDP_vals, linestyle='--', color='black', marker='x', label='SDP')
+    ax.plot(M_vals, E_proj_vals, linestyle='-.', color='black', marker='s', label='Projection')
 
     ax.set_xlabel('M', fontsize=14)
     ax.set_ylabel('Energy', fontsize=14)
-    ax.set_title(f'Exact Diagonalization vs SDP for N={N}, g={g}', fontsize=16)
+    ax.set_title(f'Exact Diagonalization vs SDP vs Projection for N={N}, g={g}', fontsize=16)
     ax.legend(fontsize=12)
 
     plt.savefig(output_file)
@@ -47,6 +50,7 @@ def plotCompTime(input_file="exactDiagSDPcomparison.json", output_file="exactSDP
     M_vals = []
     time_exact_vals = []
     time_SDP_vals = []
+    time_proj_vals = []
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -58,16 +62,18 @@ def plotCompTime(input_file="exactDiagSDPcomparison.json", output_file="exactSDP
         M_vals.append(M)
         time_exact_vals.append(time_exact)
         time_SDP_vals.append(time_SDP)
+        time_proj_vals.append(result.get('durationProj', np.nan))  # Use NaN if durationProj is not available
 
     ax.plot(M_vals, time_exact_vals, linestyle='-', color='black', marker='o', label='ED')
     ax.plot(M_vals, time_SDP_vals, linestyle='--', color='black', marker='x', label='SDP')
+    ax.plot(M_vals, time_proj_vals, linestyle='-.', color='black', marker='s', label='Projection')
 
     # Set logarithmic scale for y-axis
     ax.set_yscale('log')
 
     ax.set_xlabel('M', fontsize=14)
     ax.set_ylabel('Duration (s)', fontsize=14)
-    ax.set_title(f'Duration: Exact Diagonalization vs SDP for N={N}, g={g}', fontsize=16)
+    ax.set_title(f'Duration: Exact Diagonalization vs SDP vs Projection for N={N}, g={g}', fontsize=16)
     ax.legend(fontsize=12)
 
     plt.savefig(output_file)
@@ -84,6 +90,7 @@ def plotEnergiesG(input_file="exactDiagSDPcomparison_g.json", output_file="exact
     g_vals = []
     E_exact_vals = []
     E_SDP_vals = []
+    E_proj_vals = []
 
     fig, ax = plt.subplots(figsize=(10, 6))
 
@@ -95,13 +102,14 @@ def plotEnergiesG(input_file="exactDiagSDPcomparison_g.json", output_file="exact
         g_vals.append(g)
         E_exact_vals.append(E_exact)
         E_SDP_vals.append(E_SDP)
-
+        E_proj_vals.append(result.get('E_proj', np.nan))  # Use NaN if E_proj is not available
     ax.plot(g_vals, E_exact_vals, linestyle='-', color='black', marker='o', label='ED')
     ax.plot(g_vals, E_SDP_vals, linestyle='--', color='black', marker='x', label='SDP')
+    ax.plot(g_vals, E_proj_vals, linestyle='-.', color='black', marker='s', label='Projection')
 
     ax.set_xlabel('g', fontsize=14)
     ax.set_ylabel('Energy', fontsize=14)
-    ax.set_title(f'Exact Diagonalization vs SDP for N={N}, M={M}', fontsize=16)
+    ax.set_title(f'Exact Diagonalization vs SDP vs Projection for N={N}, M={M}', fontsize=16)
     ax.legend(fontsize=12)
 
     plt.savefig(output_file)

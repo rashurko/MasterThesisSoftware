@@ -83,10 +83,11 @@ struct System {
     // Projection method
     double alpha_p;
     Eigen::MatrixXd Gamma_p;
-
+    double Eground_proj;
 
     double durationPr;
     double durationDiag;
+    double durationProj;
 };
 
 class randomSystem {
@@ -109,6 +110,7 @@ class randomSystem {
         }
 
         void generateBasis() {
+            system.basis.clear();
             system.basis.reserve(system.dimBasis);
 
             // Initial basis vector
@@ -880,8 +882,20 @@ class randomSystem {
                     auto [I, signI] = getIdxV(i, m);
                     auto [J, signJ] = getIdxV(m, k);
                     sum += signI * signJ * mat(I, J);
+
+                    auto [I2, signI2] = getIdxV(m, i);
+                    auto [J2, signJ2] = getIdxV(k, m);
+                    sum += signI2 * signJ2 * mat(I2, J2);
+
+                    auto [I3, signI3] = getIdxV(m, i);
+                    auto [J3, signJ3] = getIdxV(m, k);
+                    sum -= signI3 * signJ3 * mat(I3, J3);
+
+                    auto [I4, signI4] = getIdxV(i, m);
+                    auto [J4, signJ4] = getIdxV(k, m);
+                    sum -= signI4 * signJ4 * mat(I4, J4);
                 }
-                sum *= 4.0 / ((system.N - 1));
+                sum *= 1.0 / ((system.N - 1));
             }
 
             return sum;
@@ -897,7 +911,7 @@ class randomSystem {
                     for (unsigned int l = 0; l < system.M; l++) {
                         for (unsigned int k = 0; k < l; k++) {
                             auto [idx2, sign2] = getIdxV(k, l);
-                            QAdj(idx1, idx2) += calcQAdjElement(i, j, k, l, mat);
+                            QAdj(idx1, idx2) += sign1 * sign2 * calcQAdjElement(i, j, k, l, mat);
                         }
                     }
                 }
@@ -988,23 +1002,6 @@ class randomSystem {
                     system.L += system.fCoeffs[i][j] * system.Llin_f_i[i][j];
                 }
             }
-        }
-
-        Eigen::MatrixXd shortToFull(Eigen::MatrixXd& matShort) const {
-            unsigned int D = system.M * system.M;
-            Eigen::MatrixXd full = Eigen::MatrixXd::Zero(D, D);
-            for (unsigned int i = 0; i < system.M; i++) {
-                for (unsigned int j = 0; j < system.M; j++) {
-                    for (unsigned int k = 0; k < system.M; k++) {
-                        for (unsigned int l = 0; l < system.M; l++) {
-                            unsigned int I = getGIndex(i, j);
-                            unsigned int J = getGIndex(k, l);
-                            full(I, J) = getShortElement(i, j, k, l, matShort);
-                        }
-                    }
-                }
-            }
-            return full;
         }
 
         Eigen::MatrixXd calcGradBarrier(double t) const {
@@ -1417,23 +1414,34 @@ class randomSystem {
         //Practical Hastenes-Stiefel CG solver
         Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B, double tol = 1e-6, unsigned int max_iter = 100000) const {
             unsigned int D = B.rows();
+
             Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D);
             Eigen::MatrixXd ALambda = calcQf_i(calcQlinf_i(Lambda));
+
             Eigen::MatrixXd R = B - ALambda;
             Eigen::MatrixXd Rnew = R;
             Eigen::MatrixXd P = R;
             double R_norm = R.norm();
 
+            Eigen::MatrixXd AP = calcQf_i(calcQlinf_i(P));
+
             double n_iter = 0;
             while (R_norm > tol && n_iter < max_iter) {
-                double alpha = (R_norm * R_norm) / (P.transpose() * (calcQf_i(calcQlinf_i(P)))).trace();
+                double alpha = (R_norm * R_norm) / (P.transpose() * AP).trace();
                 Lambda += alpha * P;
-                Rnew = B - calcQf_i(calcQlinf_i(Lambda));
+                Rnew -= alpha * AP;
                 double eta = (Rnew.norm() * Rnew.norm()) / (R_norm * R_norm);
                 P *= eta;
                 P += Rnew;
+                AP = calcQf_i(calcQlinf_i(P));
                 R = Rnew;
                 R_norm = R.norm();
+
+                //print alpha, Rnorm, Pnorm, Rnewnorm, Lambdanorm
+                std::cout << "  Alpha: " << alpha << ", Rnorm: " << R_norm << ", Pnorm: " << P.norm() << ", Rnewnorm: " << Rnew.norm() << ", Lambdanorm: " << Lambda.norm() << std::endl;
+
+                //delay 
+                //std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
                 n_iter++;
             }
@@ -1441,7 +1449,7 @@ class randomSystem {
             std::cout << "  Practical CG (Q-Projection) converged in " << n_iter << " iterations." << std::endl;
             std::cout << "  Final residual norm: " << R_norm << std::endl;
 
-            if (n_iter >= max_iter) {
+            if (n_iter >= max_iter || !std::isfinite(R_norm) || R_norm > tol) {
                 std::cerr << "Warning: Practical CG (Q-Projection) reached maximum iterations without convergence." << std::endl;
                 return Eigen::MatrixXd::Zero(D, D); // Return zero matrix to indicate failure
             }
@@ -1498,7 +1506,7 @@ class randomSystem {
             unsigned int D = Gamma.rows();
             Eigen::MatrixXd FQ = calcQf_i(Gamma); 
             double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0; // Target trace for Q-condition
-            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ); // Project FQ onto the PSD cone
+            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ);
             
             // Calculate Lambda using CG
             Eigen::MatrixXd B_mat = FQ_closest - FQ;
@@ -1520,7 +1528,7 @@ class randomSystem {
         Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma) const {
             Eigen::MatrixXd FG = calcGf_i(Gamma);
             double Trace_FG = system.N * (system.M - system.N + 1);
-            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG);
+            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG); 
 
             double trace_FG_closest = FG_closest.trace();
             std::cout << "Trace of FG_closest: " << trace_FG_closest << std::endl;
@@ -2036,9 +2044,9 @@ class randomSystem {
 
         // --------------------------------------------------------------------------
         // Projection method
-        void performProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
-            // Calculate Gamma_0
-            //calcGammaClosest(alpha, system.K, fmu, trace_tol);
+        void performProjectionMethod(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, std::string logFile = "projection_log.txt") {
+            auto start = std::chrono::high_resolution_clock::now();
+
             system.alpha_p = alpha;
             system.Gamma_p = -(1.0 / alpha) * system.K;
 
@@ -2047,32 +2055,36 @@ class randomSystem {
             Eigen::MatrixXd A = system.Gamma_p;
             Eigen::MatrixXd D_n = system.Gamma_p;
             Eigen::MatrixXd D_n_1 = system.Gamma_p;
+
+            std::ofstream log(logFile);
+            log << "--- Start Halpern's Projection Method ---" << std::endl;
+
             while ((D_n - D_n_1).norm() > 1e-6 || n == 1) {
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
                 D_n = D_n_1;
                 // Project Gamma_0 onto Q and G
                 Eigen::MatrixXd Gamma = projectGamma(D_n);
                 Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
                 Eigen::MatrixXd Cn = projectGammaG(GammaQ);
-                // Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
-                // Eigen::MatrixXd Cn = GammaQ;
-                //Eigen::MatrixXd Cn = projectGammaG(GammaQ);
-                // Eigen::MatrixXd GammaG = projectGammaG(Gamma);
-                // Eigen::MatrixXd Cn = projectGammaQ(GammaG);
 
                 D_n_1 = (1.0 / (n + 1)) * A + (static_cast<double>(n) / static_cast<double>(n + 1)) * Cn;
 
                 // Print energy
                 double energy = (system.K.array() * D_n_1.array()).sum();
                 std::cout << "Iteration " << n << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
+                log << "Iteration " << n << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
 
                 n++;
             }
             system.Gamma_p = D_n_1;
+            system.Eground_proj = (system.K.array() * system.Gamma_p.array()).sum();
+            system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
-        void performProjectionMethod_Dykstra(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3) {
-            // Calculate Gamma_0
-            //calcGammaClosest(alpha, system.K, fmu, trace_tol);
+        void performProjectionMethod_Dykstra(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, std::string logFile = "projectionDykstra_log.txt") {
+            auto start = std::chrono::high_resolution_clock::now();
+
             system.alpha_p = alpha;
             system.Gamma_p = -(1.0 / alpha) * system.K;
 
@@ -2084,8 +2096,13 @@ class randomSystem {
             Eigen::MatrixXd X_Q = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
             Eigen::MatrixXd X_G = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
 
+            std::ofstream log(logFile);
+            log << "--- Start Dykstra's Projection Method ---" << std::endl;
+
             unsigned int i = 0;
             while ((D_n - D_n_1).norm() > 1e-6 || i == 0) {
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
                 D_n = D_n_1;
 
                 // Gamma projection
@@ -2093,12 +2110,12 @@ class randomSystem {
                 D_n_1 = projectGamma(C);
                 X_Gamma = D_n_1 - C;
 
-                // Q projection
+                // // Q projection
                 C = D_n_1 - X_Q;
                 D_n_1 = projectGammaQ(C);
                 X_Q = D_n_1 - C;
 
-                // G projection
+                // // G projection
                 C = D_n_1 - X_G;
                 D_n_1 = projectGammaG(C);
                 X_G = D_n_1 - C;
@@ -2106,11 +2123,14 @@ class randomSystem {
                 // Print energy
                 double energy = (system.K.array() * D_n_1.array()).sum();
                 std::cout << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
+                log << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
 
                 i++;
             }
 
             system.Gamma_p = D_n_1;
+            system.Eground_proj = (system.K.array() * system.Gamma_p.array()).sum();
+            system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
         void saveToJsonProjection(const std::string& filename) const {
@@ -2161,8 +2181,9 @@ class randomSystem {
             file << "  ],\n";
 
             // Ground state energy
-            double energy = (system.K.array() * system.Gamma_p.array()).sum();
-            file << "  \"Ground state energy (Projection method)\": " << energy << "\n";
+            double energy = system.Eground_proj;
+            file << "  \"Ground state energy (Projection method)\": " << energy << ",\n";
+            file << "  \"durationProj\": " << system.durationProj << "\n";
 
             file << "}\n";
         }
@@ -2176,6 +2197,11 @@ class randomSystem {
                 return;
             }
 
+            // User input of alpha
+            double alpha;
+            std::cout << "Enter the value of alpha for the Projection method: ";
+            std::cin >> alpha;
+
             file << "{\n";
             file << "  \"N\": " << N << ",\n";
             file << "  \"g\": " << g << ",\n";
@@ -2185,6 +2211,7 @@ class randomSystem {
                 system.generateRandomMatrices();
                 system.diagonalizeH();
                 system.performPotentialReduction();
+                system.performProjectionMethod_Dykstra(alpha);
 
                 file << "    {\n";
                 file << "      \"M\": " << M << ",\n";
@@ -2212,11 +2239,25 @@ class randomSystem {
                     file << "\n";
                 }
                 file << "      ],\n";
+                file << "      \"Gamma_proj\": [\n";
+                for (unsigned int i = 0; i < system.system.Gamma_p.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.system.Gamma_p.cols(); ++j) {
+                        file << system.system.Gamma_p(i, j);
+                        if (j < system.system.Gamma_p.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.system.Gamma_p.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
                 file << "      \"E_exact\": " << system.system.exactEnergies.minCoeff() << ",\n";
                 file << "      \"E_SDP\": " << system.system.Eground_pr << ",\n";
+                file << "      \"E_proj\": " << system.system.Eground_proj << ",\n";
                 file << "      \"Duality gap\": " << system.system.duality_gap << ",\n";
                 file << "      \"durationDiag\": " << system.system.durationDiag << ",\n";
-                file << "      \"durationPr\": " << system.system.durationPr << "\n";
+                file << "      \"durationPr\": " << system.system.durationPr << ",\n";
+                file << "      \"durationProj\": " << system.system.durationProj << "\n";
                 file << "    }";
                 if (M + M_step <= M_max) {
                     file << ",";
@@ -2239,6 +2280,11 @@ class randomSystem {
                 return;
             }
 
+            // User input of alpha
+            double alpha;
+            std::cout << "Enter the value of alpha for the Projection method: ";
+            std::cin >> alpha;
+
             file << "{\n";
             file << "  \"N\": " << N << ",\n";
             file << "  \"M\": " << M << ",\n";
@@ -2250,9 +2296,9 @@ class randomSystem {
                 system.g = g_min + i * (g_max - g_min) / (n_g - 1);
                 // Re-generate H and K matrices with the new g value
                 generateKMatrix();
-                generateHMatrix();
                 diagonalizeH();
                 performPotentialReduction();
+                performProjectionMethod_Dykstra(alpha);
 
                 file << "    {\n";
                 file << "      \"g\": " << system.g << ",\n";
@@ -2280,11 +2326,25 @@ class randomSystem {
                     file << "\n";
                 }
                 file << "      ],\n";
+                file << "      \"Gamma_proj\": [\n";
+                for (unsigned int i = 0; i < system.Gamma_p.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.Gamma_p.cols(); ++j) {
+                        file << system.Gamma_p(i, j);
+                        if (j < system.Gamma_p.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.Gamma_p.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
                 file << "      \"E_exact\": " << system.exactEnergies.minCoeff() << ",\n";
                 file << "      \"E_SDP\": " << system.Eground_pr << ",\n";
+                file << "      \"E_proj\": " << system.Eground_proj << ",\n";
                 file << "      \"Duality gap\": " << system.duality_gap << ",\n";
                 file << "      \"durationDiag\": " << system.durationDiag << ",\n";
-                file << "      \"durationPr\": " << system.durationPr << "\n";
+                file << "      \"durationPr\": " << system.durationPr << ",\n";
+                file << "      \"durationProj\": " << system.durationProj << "\n";
                 file << "    }";
                 if (i + 1 < n_g) {
                     file << ",";
