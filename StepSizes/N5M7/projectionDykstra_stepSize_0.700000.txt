@@ -1,0 +1,32 @@
+--- Start Dykstra's Projection Method ---
+Step size: 0.7
+Tolerance: 1e-6
+Iteration 0, Energy: -4.48529, Norm diff: 8592.06, Trace Gamma: 10, Norm delta Gamma: 9.18906
+Iteration 1, Energy: -4.48535, Norm diff: 0.000250523, Trace Gamma: 10, Norm delta Gamma: 15.6212
+Iteration 2, Energy: -4.48544, Norm diff: 0.000359978, Trace Gamma: 10, Norm delta Gamma: 20.1234
+Iteration 3, Energy: -4.48557, Norm diff: 0.000518684, Trace Gamma: 9.99999, Norm delta Gamma: 23.2745
+Iteration 4, Energy: -4.48577, Norm diff: 0.000750372, Trace Gamma: 10, Norm delta Gamma: 25.4797
+Iteration 5, Energy: -4.48606, Norm diff: 0.0010927, Trace Gamma: 10, Norm delta Gamma: 27.0225
+Iteration 6, Energy: -4.48652, Norm diff: 0.00160848, Trace Gamma: 10, Norm delta Gamma: 28.1011
+Iteration 7, Energy: -4.48724, Norm diff: 0.00241537, Trace Gamma: 9.99999, Norm delta Gamma: 28.8543
+Iteration 8, Energy: -4.48854, Norm diff: 0.00379374, Trace Gamma: 10, Norm delta Gamma: 29.3786
+Iteration 9, Energy: -4.50253, Norm diff: 0.015687, Trace Gamma: 10, Norm delta Gamma: 28.3551
+Iteration 10, Energy: -4.55055, Norm diff: 0.0524081, Trace Gamma: 10, Norm delta Gamma: 24.865
+Iteration 11, Energy: -4.60008, Norm diff: 0.0569465, Trace Gamma: 10, Norm delta Gamma: 22.9772
+Iteration 12, Energy: -4.65107, Norm diff: 0.0607576, Trace Gamma: 10, Norm delta Gamma: 21.7525
+Iteration 13, Energy: -4.69946, Norm diff: 0.0616649, Trace Gamma: 10, Norm delta Gamma: 18.6782
+Iteration 14, Energy: -4.73951, Norm diff: 0.054069, Trace Gamma: 10, Norm delta Gamma: 16.3469
+Iteration 15, Energy: -4.76532, Norm diff: 0.0560002, Trace Gamma: 9.99999, Norm delta Gamma: 14.1981
+Iteration 16, Energy: -4.78465, Norm diff: 0.0570849, Trace Gamma: 10, Norm delta Gamma: 12.3155
+Iteration 17, Energy: -4.80108, Norm diff: 0.068254, Trace Gamma: 10, Norm delta Gamma: 10.39
+Iteration 18, Energy: -4.85428, Norm diff: 0.06767, Trace Gamma: 10, Norm delta Gamma: 8.54834
+Iteration 19, Energy: -4.96106, Norm diff: 0.101085, Trace Gamma: 10, Norm delta Gamma: 6.95465
+Iteration 20, Energy: -5.04694, Norm diff: 0.0991508, Trace Gamma: 10, Norm delta Gamma: 5.47486
+Iteration 21, Energy: -5.0987, Norm diff: 0.0840645, Trace Gamma: 10, Norm delta Gamma: 4.21622
+Iteration 22, Energy: -5.12383, Norm diff: 0.0559001, Trace Gamma: 9.99999, Norm delta Gamma: 3.16646
+Iteration 23, Energy: -5.12488, Norm diff: 0.0294032, Trace Gamma: 10, Norm delta Gamma: 2.272
+Iteration 24, Energy: -5.12425, Norm diff: 0.015243, Trace Gamma: 9.99999, Norm delta Gamma: 1.61867
+Iteration 25, Energy: -5.12368, Norm diff: 0.00511426, Trace Gamma: 10, Norm delta Gamma: 1.14269
+Iteration 26, Energy: -5.12368, Norm diff: 1.23264e-06, Trace Gamma: 10, Norm delta Gamma: 0.799881
+Iteration 27, Energy: -5.12368, Norm diff: 1.41891e-06, Trace Gamma: 10, Norm delta Gamma: 0.559916
+Iteration 28, Energy: -5.12368, Norm diff: 6.97938e-07, Trace Gamma: 10, Norm delta Gamma: 0.391941
