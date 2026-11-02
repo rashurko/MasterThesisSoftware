@@ -36,7 +36,8 @@ int main() {
         std::cout << "5. Run PR and ED comparison" << std::endl;
         std::cout << "6. Run PR and ED comparison for multiple g values" << std::endl;
         std::cout << "7. Run Projection Method for multiple alpha values" << std::endl;
-        std::cout << "8. Exit" << std::endl;
+        std::cout << "8. Run Projection Method for multiple step sizes" << std::endl;
+        std::cout << "9. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -121,6 +122,27 @@ int main() {
                 break;
             }
             case 8: {
+                // Inputs for the comparison
+                double step_size_min;
+                double step_size_max;
+                unsigned int n_step_sizes;
+                std::cout << "Enter the minimum value of step size (step_size_min): ";
+                std::cin >> step_size_min;
+                std::cout << "Enter the maximum value of step size (step_size_max): ";
+                std::cin >> step_size_max;
+                std::cout << "Enter the number of step sizes (n_step_sizes): ";
+                std::cin >> n_step_sizes;
+
+                if (n_step_sizes < 1) {
+                    std::cerr << "Invalid number of step sizes." << std::endl;
+                    break;
+                }
+
+                sys.runProjectionMethodMultipleStepSizes(N, M, g, 1e-3, step_size_min, step_size_max, n_step_sizes);
+                break;
+            }
+
+            case 9: {
                 running = false;
                 break;
             }

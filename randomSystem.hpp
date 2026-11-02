@@ -172,6 +172,7 @@ class randomSystem {
             // Fill the H matrix
             for (unsigned int i = 0; i < dimH; i++) {
                 for (unsigned int j = 0; j < dimH; j++) {
+                    // Pointers to ket and bra states
                     auto ket = system.basis[i];
                     auto bra = system.basis[j];
                     double H_ij = 0.0;
@@ -1417,18 +1418,21 @@ class randomSystem {
         }
 
         //Practical Hastenes-Stiefel CG solver
-        Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B, double tol = 1e-6, unsigned int max_iter = 100000) const {
+        Eigen::MatrixXd solveCG_Projection_Q(const Eigen::MatrixXd& B, double tol = 1e-8, unsigned int max_iter = 100000) {
             unsigned int D = B.rows();
 
             Eigen::MatrixXd Lambda = Eigen::MatrixXd::Zero(D, D);
-            Eigen::MatrixXd ALambda = calcQf_i(calcQlinf_i(Lambda));
+            Eigen::MatrixXd ALambda = calcQlinf_i(calcQlinf_i(Lambda));
 
             Eigen::MatrixXd R = B - ALambda;
             Eigen::MatrixXd Rnew = R;
             Eigen::MatrixXd P = R;
             double R_norm = R.norm();
 
-            Eigen::MatrixXd AP = calcQf_i(calcQlinf_i(P));
+            Eigen::MatrixXd AP = calcQlinf_i(calcQlinf_i(P));
+
+            // print trace of AP
+            std::cout << "  Trace of AP: " << AP.trace() << std::endl;
 
             double n_iter = 0;
             while (R_norm > tol && n_iter < max_iter) {
@@ -1438,7 +1442,13 @@ class randomSystem {
                 double eta = (Rnew.norm() * Rnew.norm()) / (R_norm * R_norm);
                 P *= eta;
                 P += Rnew;
-                AP = calcQf_i(calcQlinf_i(P));
+                AP = calcQlinf_i(calcQlinf_i(P));
+                std::cout << "  Trace of AP: " << AP.trace() << std::endl;
+                if ((P.transpose() * AP).trace() < 0) {
+                    std::cout << (P.transpose() * AP).trace() << std::endl;
+                    std::cerr << "Warning: AP trace is negative, indicating potential numerical instability." << std::endl;
+                    exit(EXIT_FAILURE);
+                }
                 R = Rnew;
                 R_norm = R.norm();
 
@@ -1462,7 +1472,7 @@ class randomSystem {
             return Lambda;
         }
 
-        Eigen::MatrixXd solveCG_Projection_G(const Eigen::MatrixXd& B, double tol = 1e-6, unsigned int max_iter = 10000) const {
+        Eigen::MatrixXd solveCG_Projection_G(const Eigen::MatrixXd& B, double tol = 1e-8, unsigned int max_iter = 10000) {
             unsigned int D = B.rows();
             Eigen::MatrixXd GAdjB = calcGAdj(B);
 
@@ -1508,17 +1518,18 @@ class randomSystem {
             return GAdjLambda;
         }
 
-        Eigen::MatrixXd projectGammaQ(const Eigen::MatrixXd& Gamma) const {
+        Eigen::MatrixXd projectGammaQ(const Eigen::MatrixXd& Gamma, Eigen::MatrixXd& deltaGamma_out) {
             unsigned int D = Gamma.rows();
             Eigen::MatrixXd FQ = calcQf_i(Gamma); 
             double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0; // Target trace for Q-condition
-            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ);
-            
+            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ); 
             // Calculate Lambda using CG
             Eigen::MatrixXd B_mat = FQ_closest - FQ;
 
             Eigen::MatrixXd Lambda = solveCG_Projection_Q(B_mat);
             Eigen::MatrixXd deltaGamma = calcQlinf_i(Lambda);
+            deltaGamma_out = deltaGamma;
+            //deltaGamma -= (deltaGamma.trace() / D) * Eigen::MatrixXd::Identity(D, D); // Ensure deltaGamma is traceless
 
             Eigen::MatrixXd GammaQ = Gamma + deltaGamma;
 
@@ -1531,10 +1542,10 @@ class randomSystem {
             return GammaQ;
         }
 
-        Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma) const {
+        Eigen::MatrixXd projectGammaG(const Eigen::MatrixXd& Gamma, Eigen::MatrixXd& deltaGamma_out) {
             Eigen::MatrixXd FG = calcGf_i(Gamma);
             double Trace_FG = system.N * (system.M - system.N + 1);
-            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG); 
+            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG);
 
             double trace_FG_closest = FG_closest.trace();
             std::cout << "Trace of FG_closest: " << trace_FG_closest << std::endl;
@@ -1542,7 +1553,9 @@ class randomSystem {
             Eigen::MatrixXd B_mat = FG_closest - FG;
     
             Eigen::MatrixXd deltaGamma = solveCG_Projection_G(B_mat);
-
+            deltaGamma_out = deltaGamma;
+            //deltaGamma -= (deltaGamma.trace() / Gamma.rows()) * Eigen::MatrixXd::Identity(Gamma.rows(), Gamma.rows());
+            
             // Check the residual
             Eigen::MatrixXd residual = B_mat - calcGf_i(deltaGamma);
             std::cout << "Residual norm: " << residual.norm() << std::endl;
@@ -2069,10 +2082,11 @@ class randomSystem {
                 double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
 
                 D_n = D_n_1;
+                Eigen::MatrixXd deltaGammaQ, deltaGammaG;
                 // Project Gamma_0 onto Q and G
                 Eigen::MatrixXd Gamma = projectGamma(D_n);
-                Eigen::MatrixXd GammaQ = projectGammaQ(Gamma);
-                Eigen::MatrixXd Cn = projectGammaG(GammaQ);
+                Eigen::MatrixXd GammaQ = projectGammaQ(Gamma, deltaGammaQ);
+                Eigen::MatrixXd Cn = projectGammaG(GammaQ, deltaGammaG);
 
                 D_n_1 = (1.0 / (n + 1)) * A + (static_cast<double>(n) / static_cast<double>(n + 1)) * Cn;
 
@@ -2088,7 +2102,7 @@ class randomSystem {
             system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
-        void performProjectionMethod_Dykstra(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, std::string logFile = "projectionDykstra_log.txt") {
+        void performProjectionMethod_Dykstra(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, const double step_size = 0.9, std::string logFile = "projectionDykstra_log.txt") {
             auto start = std::chrono::high_resolution_clock::now();
 
             system.alpha_p = alpha;
@@ -2098,38 +2112,45 @@ class randomSystem {
             Eigen::MatrixXd D_n = system.Gamma_p;
             Eigen::MatrixXd D_n_1 = system.Gamma_p;
             Eigen::MatrixXd C = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
+
             Eigen::MatrixXd X_Gamma = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
             Eigen::MatrixXd X_Q = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
             Eigen::MatrixXd X_G = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
 
             std::ofstream log(logFile);
             log << "--- Start Dykstra's Projection Method ---" << std::endl;
+            log << "Step size: " << step_size << std::endl;
+            log << "Tolerance: 1e-6" << std::endl;
 
             unsigned int i = 0;
             while ((D_n - D_n_1).norm() > 1e-6 || i == 0) {
                 double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
 
                 D_n = D_n_1;
+    
+                Eigen::MatrixXd deltaGammaQ, deltaGammaG;
 
                 // Gamma projection
                 C = D_n - X_Gamma;
                 D_n_1 = projectGamma(C);
-                X_Gamma = D_n_1 - C;
+                X_Gamma = step_size * (D_n_1 - C);
 
-                // // Q projection
+                // Q projection
                 C = D_n_1 - X_Q;
-                D_n_1 = projectGammaQ(C);
-                X_Q = D_n_1 - C;
+                D_n_1 = projectGammaQ(C, deltaGammaQ);
+                X_Q = step_size * (D_n_1 - C);
 
-                // // G projection
+                // G projection
                 C = D_n_1 - X_G;
-                D_n_1 = projectGammaG(C);
-                X_G = D_n_1 - C;
+                D_n_1 = projectGammaG(C, deltaGammaG);
+                X_G = step_size * (D_n_1 - C);
+
+                Eigen::MatrixXd deltaGamma = deltaGammaQ + deltaGammaG;
 
                 // Print energy
                 double energy = (system.K.array() * D_n_1.array()).sum();
                 std::cout << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
-                log << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
+                log << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << ", Trace Gamma: " << D_n_1.trace() << ", Norm delta Gamma: " << deltaGamma.norm() << std::endl;
 
                 i++;
             }
@@ -2405,6 +2426,75 @@ class randomSystem {
                 file << "\n";
                 file.flush();
             }
+
+            file << "\n  ]\n";
+            file << "}\n";
+        }
+
+        void runProjectionMethodMultipleStepSizes(unsigned int N, unsigned int M, double g, double alpha, double step_size_min, double step_size_max, unsigned int n_step_sizes, std::string outputFileJson = "StepSizes/projectionMethodMultipleStepSizes.json") {
+            std::ofstream file(outputFileJson);
+            if (!file.is_open()) {
+                std::cerr << "Could not open file for writing: " << outputFileJson << std::endl;
+                return;
+            }
+
+            file << "{\n";
+            file << "  \"N\": " << N << ",\n";
+            file << "  \"M\": " << M << ",\n";
+            file << "  \"g\": " << g << ",\n";
+            file << "  \"alpha\": " << alpha << ",\n";
+            file << "  \"results\": [\n";
+
+            for (unsigned int i = 0; i < n_step_sizes; ++i) {
+                double step_size = step_size_min + i * (step_size_max - step_size_min) / (n_step_sizes - 1);
+                std::string logFile = "StepSizes/projectionDykstra_stepSize_" + std::to_string(step_size) + ".txt";
+                performProjectionMethod_Dykstra(alpha, 1e-3, 1e-3, step_size, logFile);
+
+                file << "    {\n";
+                file << "      \"step_size\": " << step_size << ",\n";
+                file << "      \"Gamma_proj\": [\n";
+                for (unsigned int j = 0; j < system.Gamma_p.rows(); ++j) {
+                    file << "        [";
+                    for (unsigned int k = 0; k < system.Gamma_p.cols(); ++k) {
+                        file << system.Gamma_p(j, k);
+                        if (k < system.Gamma_p.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (j < system.Gamma_p.rows() - 1) {
+                        file << ",";
+                    }
+                    file << "\n";
+                }
+                file << "      ],\n";
+                file << "      \"E_proj\": " << system.Eground_proj << ",\n";
+                file << "      \"durationProj\": " << system.durationProj << "\n";
+                file << "    }";
+                file << ",";
+                file << "\n";
+                file.flush();
+            }
+
+            // SDP calculation for comparison
+            performPotentialReduction();
+            file << "    {\n";
+            file << "      \"step_size\": \"SDP\",\n";
+            file << "      \"Gamma_proj\": [\n";
+            for (unsigned int j = 0; j < system.Gamma.rows(); ++j) {
+                file << "        [";
+                for (unsigned int k = 0; k < system.Gamma.cols(); ++k) {
+                    file << system.Gamma(j, k);
+                    if (k < system.Gamma.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (j < system.Gamma.rows() - 1) {
+                    file << ",";
+                }
+                file << "\n";
+            }
+            file << "      ],\n";
+            file << "      \"E_proj\": " << system.Eground_pr << ",\n";
+            file << "      \"durationProj\": " << system.durationPr << "\n";
+            file << "    }\n";
 
             file << "\n  ]\n";
             file << "}\n";

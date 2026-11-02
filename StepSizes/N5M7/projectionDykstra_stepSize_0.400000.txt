@@ -1,0 +1,16 @@
+--- Start Dykstra's Projection Method ---
+Step size: 0.4
+Tolerance: 1e-6
+Iteration 0, Energy: -4.48529, Norm diff: 8592.06, Trace Gamma: 10, Norm delta Gamma: 9.18906
+Iteration 1, Energy: -4.48542, Norm diff: 0.000524673, Trace Gamma: 10, Norm delta Gamma: 12.8643
+Iteration 2, Energy: -4.48575, Norm diff: 0.00132556, Trace Gamma: 10, Norm delta Gamma: 14.3335
+Iteration 3, Energy: -4.48666, Norm diff: 0.00340842, Trace Gamma: 10, Norm delta Gamma: 14.9187
+Iteration 4, Energy: -4.48943, Norm diff: 0.00929081, Trace Gamma: 10, Norm delta Gamma: 15.1464
+Iteration 5, Energy: -4.59225, Norm diff: 0.114209, Trace Gamma: 9.99999, Norm delta Gamma: 11.6496
+Iteration 6, Energy: -4.70717, Norm diff: 0.121058, Trace Gamma: 10, Norm delta Gamma: 8.77355
+Iteration 7, Energy: -4.76815, Norm diff: 0.104932, Trace Gamma: 10, Norm delta Gamma: 6.11202
+Iteration 8, Energy: -4.87732, Norm diff: 0.128024, Trace Gamma: 10, Norm delta Gamma: 3.75409
+Iteration 9, Energy: -4.99372, Norm diff: 0.136661, Trace Gamma: 10, Norm delta Gamma: 2.00178
+Iteration 10, Energy: -5.00485, Norm diff: 0.0340184, Trace Gamma: 10, Norm delta Gamma: 0.882799
+Iteration 11, Energy: -5.00493, Norm diff: 0.00247344, Trace Gamma: 10, Norm delta Gamma: 0.356716
+Iteration 12, Energy: -5.00493, Norm diff: 8.30811e-08, Trace Gamma: 10, Norm delta Gamma: 0.142686

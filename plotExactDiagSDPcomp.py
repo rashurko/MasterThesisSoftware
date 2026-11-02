@@ -68,6 +68,14 @@ def plotCompTime(input_file="exactDiagSDPcomparison.json", output_file="exactSDP
     ax.plot(M_vals, time_SDP_vals, linestyle='--', color='black', marker='x', label='SDP')
     ax.plot(M_vals, time_proj_vals, linestyle='-.', color='black', marker='s', label='Projection')
 
+    #Plot theoretical scaling of O(M^6)
+    M_theory = np.array(M_vals)
+    time_theory = 1e-6 * M_theory**6  # Adjust
+    ax.plot(M_vals, time_theory, linestyle=':', color='black', label='Theoretical O(M^6)')
+    # Theoretical scaling of O(M^4)
+    time_theory_M4 = 1e-6 * M_theory**4  # Adjust
+    ax.plot(M_vals, time_theory_M4, linestyle=':', color='gray', label='Theoretical O(M^4)')
+
     # Set logarithmic scale for y-axis
     ax.set_yscale('log')
 
