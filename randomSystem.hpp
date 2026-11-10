@@ -2503,7 +2503,9 @@ class randomSystem {
 
         // ----------------------------------------------------------------------------
         // ADMM
-        void performADMM(const double alpha, const double rho, const unsigned int max_iter) {
+        void performADMM(const double alpha, const double rho, const double tolerance = 1e-6, const unsigned int max_iter = 100000, std::string logFile = "admm_log.txt") {
+            auto start = std::chrono::high_resolution_clock::now();
+
             system.alpha_admm = alpha;
             system.rho_admm = rho;
             system.Gamma_admm = -(1.0 / alpha) * system.K;
@@ -2528,8 +2530,15 @@ class randomSystem {
             Eigen::MatrixXd UG_k = Eigen::MatrixXd::Zero(PG, PG);
             Eigen::MatrixXd UG_k_1 = Eigen::MatrixXd::Zero(PG, PG);
 
+            std::ofstream log(logFile);
+            log << "--- Start ADMM Solver ---" << std::endl;
+            log << "Tolerance: " << tolerance << std::endl;
+            log << "Maximum iterations: " << max_iter << std::endl;
+
             unsigned int k = 0;
             while ((Gamma_k - Gamma_k_1).norm() > 1e-6 || k == 0 && k < max_iter) {
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
                 Gamma_k = Gamma_k_1;
                 XGamma_k = XGamma_k_1;
                 XQ_k = XQ_k_1;
@@ -2554,17 +2563,59 @@ class randomSystem {
 
                 // Print energy
                 double energy = (system.K.array() * Gamma_k_1.array()).sum();
-                std::cout << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << std::endl;
+                std::cout << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Time: " << elapsed << " s" << std::endl;
+                log << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Time: " << elapsed << " s" << std::endl;
 
                 k++;
             }
 
             system.Gamma_admm = Gamma_k_1;
             system.Eground_admm = (system.K.array() * system.Gamma_admm.array()).sum();
+            system.durationADMM = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+        }
+
+        void saveToJsonADMM(const std::string& filename) const {
+            std::ofstream file(filename);
+            if (!file) {
+                std::cerr << "Error opening file for writing: " << filename << std::endl;
+                return;
+            }
+
+            file << "{\n";
+
+            // N
+            file << "  \"N\": " << system.N << ",\n";
+            // M
+            file << "  \"M\": " << system.M << ",\n";
+            // g
+            file << "  \"g\": " << system.g << ",\n";
+            // seed 
+            file << "  \"seed\": " << seed << ",\n";
+
+            // Gamma
+            file << "  \"Gamma\": [\n";
+            for (unsigned int i = 0; i < system.Gamma_admm.rows(); i++) {
+                file << "    [";
+                for (unsigned int j = 0; j < system.Gamma_admm.cols(); j++) {
+                    file << system.Gamma_admm(i, j);
+                    if (j < system.Gamma_admm.cols() - 1) file << ", ";
+                }
+                file << "]";
+                if (i < system.Gamma_admm.rows() - 1) file << ",";
+                file << "\n";
+            }
+            file << "  ],\n";
+
+            // Ground state energy
+            double energy = system.Eground_admm;
+            file << "  \"Ground state energy (ADMM)\": " << energy << ",\n";
+            file << "  \"durationADMM\": " << system.durationADMM << "\n";
+
+            file << "}\n";
         }
         
         // ----------------------------------------------------------------------------
-        // Comparison of exact diagonalization and SDP
+        // Comparison of exact diagonalization and SDP and Dykstra's projection method and ADMM
         void runExactDiagAndSDPMultiple(unsigned int N, double g, unsigned int M_min, unsigned int M_max, unsigned int M_step, std::string outputFileJson = "exactDiagSDPcomparison.json") {
             std::ofstream file(outputFileJson);
             if (!file.is_open()) {
@@ -2587,6 +2638,7 @@ class randomSystem {
                 system.diagonalizeH();
                 system.performPotentialReduction();
                 system.performProjectionMethod_Dykstra(alpha);
+                system.performADMM(alpha, 1.0, 1e-6, 100000);
 
                 file << "    {\n";
                 file << "      \"M\": " << M << ",\n";
@@ -2626,13 +2678,27 @@ class randomSystem {
                     file << "\n";
                 }
                 file << "      ],\n";
+                file << "      \"Gamma_ADMM\": [\n";
+                for (unsigned int i = 0; i < system.system.Gamma_admm.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.system.Gamma_admm.cols(); ++j) {
+                        file << system.system.Gamma_admm(i, j);
+                        if (j < system.system.Gamma_admm.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.system.Gamma_admm.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
                 file << "      \"E_exact\": " << system.system.exactEnergies.minCoeff() << ",\n";
                 file << "      \"E_SDP\": " << system.system.Eground_pr << ",\n";
                 file << "      \"E_proj\": " << system.system.Eground_proj << ",\n";
                 file << "      \"Duality gap\": " << system.system.duality_gap << ",\n";
+                file << "      \"E_ADMM\": " << system.system.Eground_admm << ",\n";
                 file << "      \"durationDiag\": " << system.system.durationDiag << ",\n";
                 file << "      \"durationPr\": " << system.system.durationPr << ",\n";
-                file << "      \"durationProj\": " << system.system.durationProj << "\n";
+                file << "      \"durationProj\": " << system.system.durationProj << ",\n";
+                file << "      \"durationADMM\": " << system.system.durationADMM << "\n";
                 file << "    }";
                 if (M + M_step <= M_max) {
                     file << ",";
@@ -2647,7 +2713,7 @@ class randomSystem {
         }
 
         // ----------------------------------------------------------------------------
-        // Comparison of exact diagonalization and SDP for a single system with different g values
+        // Comparison of exact diagonalization, SDP, Dykstra's projection and ADMM for a single system with different g values
         void runExactDiagAndSDPMultipleG(unsigned int N, unsigned int M, double g_min, double g_max, double n_g, std::string outputFileJson = "exactDiagSDPcomparison_g.json") {
             std::ofstream file(outputFileJson);
             if (!file.is_open()) {
@@ -2674,6 +2740,7 @@ class randomSystem {
                 diagonalizeH();
                 performPotentialReduction();
                 performProjectionMethod_Dykstra(alpha);
+                performADMM(alpha, 1.0, 1e-6, 100000);
 
                 file << "    {\n";
                 file << "      \"g\": " << system.g << ",\n";
@@ -2713,10 +2780,23 @@ class randomSystem {
                     file << "\n";
                 }
                 file << "      ],\n";
+                file << "      \"Gamma_ADMM\": [\n";
+                for (unsigned int i = 0; i < system.Gamma_admm.rows(); ++i) {
+                    file << "        [";
+                    for (unsigned int j = 0; j < system.Gamma_admm.cols(); ++j) {
+                        file << system.Gamma_admm(i, j);
+                        if (j < system.Gamma_admm.cols() - 1) file << ", ";
+                    }
+                    file << "]";
+                    if (i < system.Gamma_admm.rows() - 1) file << ",";
+                    file << "\n";
+                }
+                file << "      ],\n";
                 file << "      \"E_exact\": " << system.exactEnergies.minCoeff() << ",\n";
                 file << "      \"E_SDP\": " << system.Eground_pr << ",\n";
                 file << "      \"E_proj\": " << system.Eground_proj << ",\n";
                 file << "      \"Duality gap\": " << system.duality_gap << ",\n";
+                file << "      \"E_ADMM\": " << system.Eground_admm << ",\n";
                 file << "      \"durationDiag\": " << system.durationDiag << ",\n";
                 file << "      \"durationPr\": " << system.durationPr << ",\n";
                 file << "      \"durationProj\": " << system.durationProj << "\n";
