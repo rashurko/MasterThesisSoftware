@@ -76,7 +76,8 @@ int main() {
             case 6: {
                 double alpha = 1e-3;
                 double rho = 1.0;
-                sys.performADMM(alpha, rho, 100000);
+                sys.performADMM(alpha, rho, 1e-6, 100000);
+                sys.saveToJsonADMM("ADMM.json");
                 break;
             }
 
