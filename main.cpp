@@ -33,11 +33,13 @@ int main() {
         std::cout << "2. Calculate exact eigenvalues" << std::endl;
         std::cout << "3. Perform Potential Reduction Method" << std::endl;
         std::cout << "4. Perform Projection Method" << std::endl;
-        std::cout << "5. Run PR and ED comparison" << std::endl;
-        std::cout << "6. Run PR and ED comparison for multiple g values" << std::endl;
-        std::cout << "7. Run Projection Method for multiple alpha values" << std::endl;
-        std::cout << "8. Run Projection Method for multiple step sizes" << std::endl;
-        std::cout << "9. Exit" << std::endl;
+        std::cout << "5. Perform Projection Method with exact projections" << std::endl;
+        std::cout << "6. Perform ADMM Method" << std::endl;
+        std::cout << "7. Run PR and ED comparison" << std::endl;
+        std::cout << "8. Run PR and ED comparison for multiple g values" << std::endl;
+        std::cout << "9. Run Projection Method for multiple alpha values" << std::endl;
+        std::cout << "10. Run Projection Method for multiple step sizes" << std::endl;
+        std::cout << "11. Exit" << std::endl;
 
         int choice;
         std::cin >> choice;
@@ -65,6 +67,20 @@ int main() {
             }
 
             case 5: {
+                double alpha = 1e-3;
+                sys.performProjectionMethod_Dykstra_ExactProjection(alpha, 1e-3, 1e-3);
+                sys.saveToJsonProjection("projectionMethod_exact.json");
+                break;
+            }
+
+            case 6: {
+                double alpha = 1e-3;
+                double rho = 1.0;
+                sys.performADMM(alpha, rho, 100000);
+                break;
+            }
+
+            case 7: {
                 // Inputs for the comparison
                 unsigned int M_min;
                 unsigned int M_max;
@@ -79,7 +95,7 @@ int main() {
                 sys.runExactDiagAndSDPMultiple(N, g, M_min, M_max, M_step);
                 break;
             }
-            case 6: {
+            case 8: {
                 // Inputs for the comparison
                 double g_min;
                 double g_max;
@@ -100,7 +116,7 @@ int main() {
                 sys.runExactDiagAndSDPMultipleG(N, M, g_min, g_max, n_g);
                 break;
             }
-            case 7: {
+            case 9: {
                 // Inputs for the comparison
                 double alpha_min;
                 double alpha_max;
@@ -121,7 +137,7 @@ int main() {
                 sys.runProjectionMethodMultipleAlphas(N, M, g, alpha_min, alpha_max, n_alpha);
                 break;
             }
-            case 8: {
+            case 10: {
                 // Inputs for the comparison
                 double step_size_min;
                 double step_size_max;
@@ -142,7 +158,7 @@ int main() {
                 break;
             }
 
-            case 9: {
+            case 11: {
                 running = false;
                 break;
             }

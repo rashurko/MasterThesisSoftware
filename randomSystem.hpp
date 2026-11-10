@@ -80,14 +80,23 @@ struct System {
     double Eground_pr;
     double duality_gap;
 
+    // -----------------
     // Projection method
     double alpha_p;
     Eigen::MatrixXd Gamma_p;
     double Eground_proj;
 
+    // -----------------
+    // ADMM
+    double alpha_admm;
+    double rho_admm;
+    Eigen::MatrixXd Gamma_admm;
+    double Eground_admm;
+
     double durationPr;
     double durationDiag;
     double durationProj;
+    double durationADMM;
 };
 
 class randomSystem {
@@ -1577,6 +1586,218 @@ class randomSystem {
             return GammaG;
         }
 
+        Eigen::MatrixXd projectGammaQ_exact(const Eigen::MatrixXd& Gamma, const Eigen::MatrixXd& QQAdjInv_Mat, const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs, Eigen::MatrixXd& deltaGamma_out) {
+            Eigen::MatrixXd FQ = calcQf_i(Gamma); 
+            double Trace_FQ = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0; // Target trace for Q-condition
+            Eigen::MatrixXd FQ_closest = getFClosest(FQ, Trace_FQ); 
+            Eigen::MatrixXd B_mat = FQ_closest - FQ;
+
+            unsigned int D = Gamma.rows();
+            Eigen::MatrixXd b_vec = transformToVector(B_mat, basisPairs);
+            Eigen::VectorXd lambda_vec = QQAdjInv_Mat * b_vec;
+            Eigen::MatrixXd Lambda = transformToMatrix(lambda_vec, D, basisPairs);
+            deltaGamma_out = calcQlinf_i(Lambda);
+
+            return Gamma + deltaGamma_out;
+        }
+
+        Eigen::MatrixXd projectGammaG_exact(const Eigen::MatrixXd& Gamma, const Eigen::MatrixXd& GGAdjInv_Mat, const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs, Eigen::MatrixXd& deltaGamma_out) {
+            Eigen::MatrixXd FG = calcGf_i(Gamma);
+            double Trace_FG = system.N * (system.M - system.N + 1);
+            Eigen::MatrixXd FG_closest = getFClosest(FG, Trace_FG);
+
+            Eigen::MatrixXd B_mat = FG_closest - FG;
+            Eigen::MatrixXd GAdjB = calcGAdj(B_mat);
+
+            unsigned int D = Gamma.rows();
+            Eigen::VectorXd b_vec = transformToVector(GAdjB, basisPairs);
+            Eigen::VectorXd deltaGamma_vec = GGAdjInv_Mat * b_vec;
+            deltaGamma_out = transformToMatrix(deltaGamma_vec, D, basisPairs);
+
+            return Gamma + deltaGamma_out;
+        }
+
+        std::vector<std::pair<unsigned int, unsigned int>> generateBasisPairs(unsigned int D) const {
+            std::vector<std::pair<unsigned int, unsigned int>> basisPairs;
+            for (unsigned int i = 0; i < D; i++) {
+                for (unsigned int j = i; j < D; j++) {
+                    basisPairs.push_back({i, j});
+                }
+            }
+            return basisPairs;
+        }
+
+        // Constructs the matrix QQAdj (D^2 x D^2) that represents the linear map from Lambda to Q(Lambda) in vectorized form
+        Eigen::MatrixXd QQAdj(const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs) {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            unsigned int D_sym = D*(D+1)/2;
+            Eigen::MatrixXd QQAdjMat = Eigen::MatrixXd::Zero(D_sym, D_sym);
+
+            // Each basis matrix E_nu forms column nu of QQAdj
+            for (unsigned int nu = 0; nu < D_sym; nu++) {
+                auto [i, j] = basisPairs[nu];
+                Eigen::MatrixXd E_nu = Eigen::MatrixXd::Zero(D, D);
+
+                if (i == j) {
+                    E_nu(i, j) = 1.0;
+                } else {
+                    E_nu(i, j) = 1.0 / std::sqrt(2.0);
+                    E_nu(j, i) = 1.0 / std::sqrt(2.0);
+                }
+
+                Eigen::MatrixXd QE = calcQlinf_i(calcQlinf_i(E_nu));
+                for (unsigned int mu = 0; mu < D_sym; mu++) {
+                    auto [r, s] = basisPairs[mu];
+                    if (r == s) {
+                        QQAdjMat(mu, nu) = QE(r, s);
+                    } else {
+                        QQAdjMat(mu, nu) = std::sqrt(2.0) * QE(r, s);
+                    }
+                }
+            }
+
+            return QQAdjMat;
+        }
+
+        // Constructs the matrix GGAdj (D_sym x D_sym) that represents the linear map from Lambda to GAdj(G(Lambda)) in vectorized form
+        Eigen::MatrixXd GGAdj(const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs) {
+            unsigned int D = system.M * (system.M - 1) / 2;
+            unsigned int D_sym = D * (D + 1) / 2;
+            Eigen::MatrixXd GGAdjMat = Eigen::MatrixXd::Zero(D_sym, D_sym);
+
+            // Each basis matrix E_nu forms column nu of GGAdj
+            for (unsigned int nu = 0; nu < D_sym; nu++) {
+                auto [i, j] = basisPairs[nu];
+                Eigen::MatrixXd E_nu = Eigen::MatrixXd::Zero(D, D);
+
+                if (i == j) {
+                    E_nu(i, j) = 1.0;
+                } else {
+                    E_nu(i, j) = 1.0 / std::sqrt(2.0);
+                    E_nu(j, i) = 1.0 / std::sqrt(2.0);
+                }
+
+                Eigen::MatrixXd GE = calcGAdj(calcGf_i(E_nu));
+                for (unsigned int mu = 0; mu < D_sym; mu++) {
+                    auto [r, s] = basisPairs[mu];
+                    if (r == s) {
+                        GGAdjMat(mu, nu) = GE(r, s);
+                    } else {
+                        GGAdjMat(mu, nu) = std::sqrt(2.0) * GE(r, s);
+                    }
+                }
+            }
+
+            return GGAdjMat;
+        }
+
+        Eigen::VectorXd transformToVector(const Eigen::MatrixXd& mat, const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs) const {
+            unsigned int D = basisPairs.size();
+            Eigen::VectorXd vec(D);
+            for (unsigned int mu = 0; mu < D; mu++) {
+                auto [i, j] = basisPairs[mu];
+                if (i == j) {
+                    vec(mu) = mat(i, j);
+                } else {
+                    vec(mu) = std::sqrt(2.0) * mat(i, j);
+                }
+            }
+            return vec;
+        }
+
+        Eigen::MatrixXd transformToMatrix(const Eigen::VectorXd& vec, unsigned int D, const std::vector<std::pair<unsigned int, unsigned int>>& basisPairs) const {
+            Eigen::MatrixXd mat(D, D);
+            unsigned int D_sym = basisPairs.size();
+            for (unsigned int mu = 0; mu < D_sym; mu++) {
+                auto [i, j] = basisPairs[mu];
+                if (i == j) {
+                    mat(i, j) = vec(mu);
+                } else {
+                    mat(i, j) = vec(mu) / std::sqrt(2.0);
+                    mat(j, i) = vec(mu) / std::sqrt(2.0);
+                }
+            }
+            return mat;
+        }
+
+        // --------------------------------------------------------------------------------
+        // ADMM
+        Eigen::MatrixXd getXGamma(const Eigen::MatrixXd& Gamma, const Eigen::MatrixXd& UGamma) const {
+            double Trace_Gamma = system.N * (system.N - 1) / 2;
+            Eigen::MatrixXd XGamma = getFClosest(Gamma - UGamma, Trace_Gamma);
+            return XGamma;
+        }
+
+        Eigen::MatrixXd getXQ(const Eigen::MatrixXd& Gamma, const Eigen::MatrixXd& UQ) const {
+            double Trace_Q = static_cast<double>((system.M - system.N) * (system.M - system.N - 1)) / 2.0;
+            Eigen::MatrixXd QGamma = calcQf_i(Gamma);
+            Eigen::MatrixXd XQ = getFClosest(QGamma - UQ, Trace_Q);
+            return XQ;
+        }
+
+        Eigen::MatrixXd getXG(const Eigen::MatrixXd& Gamma, const Eigen::MatrixXd& UG) const {
+            double Trace_G = system.N * (system.M - system.N + 1);
+            Eigen::MatrixXd GGamma = calcGf_i(Gamma);
+            Eigen::MatrixXd XG = getFClosest(GGamma - UG, Trace_G);
+            return XG;
+        }
+
+        Eigen::MatrixXd getAGamma(const Eigen::MatrixXd& Gamma, const double alpha, const double rho) const {
+            Eigen::MatrixXd AGamma = (alpha/rho + 1.0) * Gamma + calcQlinf_i(calcQf_i(Gamma)) + calcGAdj(calcGf_i(Gamma));
+            return AGamma;
+        }
+
+        Eigen::MatrixXd solveCG_Gamma_ADMM(const Eigen::MatrixXd& B, double alpha, double rho, double tol = 1e-8, unsigned int max_iter = 10000) {
+            unsigned int D = B.rows();
+            
+            Eigen::MatrixXd GammaNew = Eigen::MatrixXd::Zero(D, D);
+            Eigen::MatrixXd AGammaNew = getAGamma(GammaNew, alpha, rho);
+
+            Eigen::MatrixXd R = B - AGammaNew;
+            Eigen::MatrixXd Rnew = R;
+            Eigen::MatrixXd P = R;
+            double R_norm = R.norm();
+
+            Eigen::MatrixXd AP = getAGamma(P, alpha, rho);
+
+            double n_iter = 0;
+            while (R_norm > tol && n_iter < max_iter) {
+                double alpha_cg = (R_norm * R_norm) / (P.transpose() * AP).trace();
+                GammaNew += alpha_cg * P;
+                Rnew -= alpha_cg * AP;
+                double eta = (Rnew.norm() * Rnew.norm()) / (R_norm * R_norm);
+                P *= eta;
+                P += Rnew;
+                AP = getAGamma(P, alpha, rho);
+                R = Rnew;
+                R_norm = R.norm();
+                n_iter++;
+            }
+
+            std::cout << "  Practical CG (ADMM) converged in " << n_iter << " iterations." << std::endl;
+            std::cout << "  Final residual norm: " << R_norm << std::endl;
+
+            return GammaNew;
+        }
+
+        Eigen::MatrixXd getUGamma(const Eigen::MatrixXd& UGammaPrev, const Eigen::MatrixXd& XGamma, const Eigen::MatrixXd& Gamma) const {
+            Eigen::MatrixXd UGamma = UGammaPrev + XGamma - Gamma;
+            return UGamma;
+        }
+
+        Eigen::MatrixXd getUQ(const Eigen::MatrixXd& UQPrev, const Eigen::MatrixXd& XQ, const Eigen::MatrixXd& Gamma) const {
+            Eigen::MatrixXd QGamma = calcQf_i(Gamma);
+            Eigen::MatrixXd UQ = UQPrev + XQ - QGamma;
+            return UQ;
+        }
+
+        Eigen::MatrixXd getUG(const Eigen::MatrixXd& UGPrev, const Eigen::MatrixXd& XG, const Eigen::MatrixXd& Gamma) const {
+            Eigen::MatrixXd GGamma = calcGf_i(Gamma);
+            Eigen::MatrixXd UG = UGPrev + XG - GGamma;
+            return UG;
+        }
+
+
     public:
         randomSystem(unsigned int N, unsigned int M, double g, unsigned int seed) {
             system.N = N;
@@ -2160,6 +2381,71 @@ class randomSystem {
             system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
         }
 
+        void performProjectionMethod_Dykstra_ExactProjection(const double alpha, const double fmu = 1e-3, const double trace_tol = 1e-3, const double step_size = 0.9, std::string logFile = "projectionDykstra_ExactProjection_log.txt") {
+            auto start = std::chrono::high_resolution_clock::now();
+
+            system.alpha_p = alpha;
+            system.Gamma_p = -(1.0 / alpha) * system.K;
+
+            // Dykstra's algorithm
+            Eigen::MatrixXd D_n = system.Gamma_p;
+            Eigen::MatrixXd D_n_1 = system.Gamma_p;
+            Eigen::MatrixXd C = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
+
+            Eigen::MatrixXd X_Gamma = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
+            Eigen::MatrixXd X_Q = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
+            Eigen::MatrixXd X_G = Eigen::MatrixXd::Zero(D_n.rows(), D_n.cols());
+
+            auto basisPairs = generateBasisPairs(system.M * (system.M - 1) / 2);
+
+            Eigen::MatrixXd QQAdjMat = QQAdj(basisPairs);
+            Eigen::MatrixXd QQAdjInv_Mat = QQAdjMat.ldlt().solve(Eigen::MatrixXd::Identity(QQAdjMat.rows(), QQAdjMat.cols()));
+            Eigen::MatrixXd GGAdjMat = GGAdj(basisPairs);
+            Eigen::MatrixXd GGAdjInv_Mat = GGAdjMat.ldlt().solve(Eigen::MatrixXd::Identity(GGAdjMat.rows(), GGAdjMat.cols()));
+
+            std::ofstream log(logFile);
+            log << "--- Start Dykstra's Projection Method ---" << std::endl;
+            log << "Step size: " << step_size << std::endl;
+            log << "Tolerance: 1e-6" << std::endl;
+
+            unsigned int i = 0;
+            while ((D_n - D_n_1).norm() > 1e-6 || i == 0) {
+                double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+
+                D_n = D_n_1;
+    
+                Eigen::MatrixXd deltaGammaQ, deltaGammaG;
+
+                // Gamma projection
+                C = D_n - X_Gamma;
+                D_n_1 = projectGamma(C);
+                X_Gamma = (D_n_1 - C);
+
+                // Q projection
+                C = D_n_1 - X_Q;
+                D_n_1 = projectGammaQ_exact(C, QQAdjInv_Mat, basisPairs, deltaGammaQ);
+                X_Q = (D_n_1 - C);
+
+                // G projection
+                C = D_n_1 - X_G;
+                D_n_1 = projectGammaG_exact(C, GGAdjInv_Mat, basisPairs, deltaGammaG);
+                X_G = (D_n_1 - C);
+
+                Eigen::MatrixXd deltaGamma = deltaGammaQ + deltaGammaG;
+
+                // Print energy
+                double energy = (system.K.array() * D_n_1.array()).sum();
+                std::cout << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << std::endl;
+                log << "Iteration " << i << ", Energy: " << energy << ", Norm diff: " << (D_n - D_n_1).norm() << ", Trace Gamma: " << D_n_1.trace() << ", Norm delta Gamma: " << deltaGamma.norm() << std::endl;
+
+                i++;
+            }
+
+            system.Gamma_p = D_n_1;
+            system.Eground_proj = (system.K.array() * system.Gamma_p.array()).sum();
+            system.durationProj = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
+        }
+
         void saveToJsonProjection(const std::string& filename) const {
             std::ofstream file(filename);
             if (!file) {
@@ -2213,6 +2499,68 @@ class randomSystem {
             file << "  \"durationProj\": " << system.durationProj << "\n";
 
             file << "}\n";
+        }
+
+        // ----------------------------------------------------------------------------
+        // ADMM
+        void performADMM(const double alpha, const double rho, const unsigned int max_iter) {
+            system.alpha_admm = alpha;
+            system.rho_admm = rho;
+            system.Gamma_admm = -(1.0 / alpha) * system.K;
+
+            unsigned int P = system.M * (system.M - 1) / 2;
+            unsigned int PG = system.M * system.M;
+
+            Eigen::MatrixXd Gamma_k = system.Gamma_admm;
+            Eigen::MatrixXd Gamma_k_1 = system.Gamma_admm;
+
+            Eigen::MatrixXd XGamma_k = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd XGamma_k_1 = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd XQ_k = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd XQ_k_1 = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd XG_k = Eigen::MatrixXd::Zero(PG, PG);
+            Eigen::MatrixXd XG_k_1 = Eigen::MatrixXd::Zero(PG, PG);
+
+            Eigen::MatrixXd UGamma_k = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd UGamma_k_1 = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd UQ_k = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd UQ_k_1 = Eigen::MatrixXd::Zero(P, P);
+            Eigen::MatrixXd UG_k = Eigen::MatrixXd::Zero(PG, PG);
+            Eigen::MatrixXd UG_k_1 = Eigen::MatrixXd::Zero(PG, PG);
+
+            unsigned int k = 0;
+            while ((Gamma_k - Gamma_k_1).norm() > 1e-6 || k == 0 && k < max_iter) {
+                Gamma_k = Gamma_k_1;
+                XGamma_k = XGamma_k_1;
+                XQ_k = XQ_k_1;
+                XG_k = XG_k_1;
+                UGamma_k = UGamma_k_1;
+                UQ_k = UQ_k_1;
+                UG_k = UG_k_1;
+
+                // Gamma calculation
+                Eigen::MatrixXd B = (XGamma_k + UGamma_k) + calcQlinf_i(XQ_k + UQ_k) + calcGAdj(XG_k + UG_k) - (1.0 / rho) * system.K;
+                Gamma_k_1 = solveCG_Gamma_ADMM(B, alpha, rho);
+
+                // X's calculation
+                XGamma_k_1 = getXGamma(Gamma_k_1, UGamma_k);
+                XQ_k_1 = getXQ(Gamma_k_1, UQ_k);
+                XG_k_1 = getXG(Gamma_k_1, UG_k);
+
+                // U's calculation
+                UGamma_k_1 = UGamma_k + XGamma_k_1 - Gamma_k_1;
+                UQ_k_1 = UQ_k + XQ_k_1 - calcQf_i(Gamma_k_1);
+                UG_k_1 = UG_k + XG_k_1 - calcGf_i(Gamma_k_1);
+
+                // Print energy
+                double energy = (system.K.array() * Gamma_k_1.array()).sum();
+                std::cout << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << std::endl;
+
+                k++;
+            }
+
+            system.Gamma_admm = Gamma_k_1;
+            system.Eground_admm = (system.K.array() * system.Gamma_admm.array()).sum();
         }
         
         // ----------------------------------------------------------------------------
