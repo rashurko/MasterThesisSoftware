@@ -93,10 +93,17 @@ struct System {
     Eigen::MatrixXd Gamma_admm;
     double Eground_admm;
 
+    // -----------------
+    // Closest PSD matrix
+    double alpha_closest;
+    Eigen::MatrixXd Gamma_closest;
+    double Eground_closest;
+
     double durationPr;
     double durationDiag;
     double durationProj;
     double durationADMM;
+    double durationClosest;
 };
 
 class randomSystem {
@@ -1395,7 +1402,8 @@ class randomSystem {
             double mu_max = evals.maxCoeff(); 
             double mu = 0.0;
 
-            while ((mu_max - mu_min) > bis_tol) {
+            unsigned int n_bis = 0;
+            while ((mu_max - mu_min) > bis_tol && (mu_max - mu_min) > std::abs(mu_max) * 1e-15 && n_bis++ < 100) {
                 mu = 0.5 * (mu_min + mu_max);
                 
                 current_trace = 0.0;
@@ -1417,7 +1425,56 @@ class randomSystem {
 
             Eigen::MatrixXd F_closest = solver.eigenvectors() * shifted_evals.asDiagonal() * solver.eigenvectors().transpose();
             return F_closest;
-        }       
+        }
+        
+        Eigen::MatrixXd getFClosestNorm(const Eigen::MatrixXd& F, const double Trace_F, const double Norm_F, const double bis_tol = 1e-6, const unsigned int max_iter = 100000) const {
+            unsigned int D = F.rows();
+
+            // Eigenvalues of F
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> solver(F);
+            if (solver.info() != Eigen::Success) {
+                std::cerr << "Error diagonalizing F" << std::endl;
+                exit(EXIT_FAILURE);
+            }
+            Eigen::VectorXd evals = solver.eigenvalues();
+
+            // Bisection method to find mu
+            double mu_min = -1e6;
+            double mu_max = evals.maxCoeff();
+            double mu = 0.0;
+            double beta = 0.0;
+
+            unsigned int n_bis = 0;
+            while ((mu_max - mu_min) > bis_tol && n_bis++ < max_iter) {
+                mu = 0.5 * (mu_min + mu_max);
+
+                Eigen::VectorXd shifted_evals_f(D);
+                Eigen::VectorXd shifted_evals_g(D);
+                for (unsigned int i = 0; i < D; i++) {
+                    shifted_evals_f(i) = std::max(0.0, evals(i) - mu);
+                    shifted_evals_g(i) = std::max(0.0, evals(i) - mu) * (evals(i) - mu);
+                }
+                double f_mu = shifted_evals_f.sum();
+                double g_mu = shifted_evals_g.sum();
+                double G_mu = f_mu*f_mu / g_mu;
+                if (G_mu > Norm_F) {
+                    mu_min = mu;
+                } else {
+                    mu_max = mu;
+                }
+
+                if (f_mu != 0) {
+                    beta = Trace_F / f_mu;
+                }
+            }
+
+            Eigen::MatrixXd F_closest(D, D);
+            for (unsigned int i = 0; i < D; i++) {
+                double shifted_eval = std::max(0.0, evals(i) - mu);
+                F_closest += beta * shifted_eval * solver.eigenvectors().col(i) * solver.eigenvectors().col(i).transpose();
+            }
+            return F_closest;
+        }
 
         Eigen::MatrixXd projectGamma(const Eigen::MatrixXd& Gamma) const {
             Eigen::MatrixXd FGamma = Gamma;
@@ -1743,7 +1800,7 @@ class randomSystem {
         }
 
         Eigen::MatrixXd getAGamma(const Eigen::MatrixXd& Gamma, const double alpha, const double rho) const {
-            Eigen::MatrixXd AGamma = (alpha/rho + 1.0) * Gamma + calcQlinf_i(calcQf_i(Gamma)) + calcGAdj(calcGf_i(Gamma));
+            Eigen::MatrixXd AGamma = (alpha/rho + 1.0) * Gamma + calcQf_i(calcQf_i(Gamma)) + calcGAdj(calcGf_i(Gamma));
             return AGamma;
         }
 
@@ -2344,7 +2401,7 @@ class randomSystem {
             log << "Tolerance: 1e-6" << std::endl;
 
             unsigned int i = 0;
-            while ((D_n - D_n_1).norm() > 1e-6 || i == 0) {
+            while ((D_n - D_n_1).norm() > 1e-5 || i == 0) {
                 double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
 
                 D_n = D_n_1;
@@ -2503,15 +2560,16 @@ class randomSystem {
 
         // ----------------------------------------------------------------------------
         // ADMM
-        void performADMM(const double alpha, const double rho, const double tolerance = 1e-6, const unsigned int max_iter = 100000, std::string logFile = "admm_log.txt") {
+        void performADMM(const double alpha, const double rho, const double tolerance = 1e-6, const double mu = 10.0, const double tau = 2.0, const unsigned int max_iter = 100000, std::string logFile = "admm_log.txt") {
             auto start = std::chrono::high_resolution_clock::now();
 
             system.alpha_admm = alpha;
             system.rho_admm = rho;
-            system.Gamma_admm = -(1.0 / alpha) * system.K;
+            //system.Gamma_admm = -(1.0 / alpha) * system.K;            
 
             unsigned int P = system.M * (system.M - 1) / 2;
             unsigned int PG = system.M * system.M;
+            system.Gamma_admm = Eigen::MatrixXd::Zero(P, P);
 
             Eigen::MatrixXd Gamma_k = system.Gamma_admm;
             Eigen::MatrixXd Gamma_k_1 = system.Gamma_admm;
@@ -2535,8 +2593,10 @@ class randomSystem {
             log << "Tolerance: " << tolerance << std::endl;
             log << "Maximum iterations: " << max_iter << std::endl;
 
+            double r_k_1 = 0.0;
+            double s_k_1 = 0.0;
             unsigned int k = 0;
-            while ((Gamma_k - Gamma_k_1).norm() > 1e-6 || k == 0 && k < max_iter) {
+            while (((r_k_1 > tolerance || s_k_1 > tolerance) || k == 0) && k < max_iter) {
                 double elapsed = std::chrono::duration<double>(std::chrono::high_resolution_clock::now() - start).count();
 
                 Gamma_k = Gamma_k_1;
@@ -2548,8 +2608,8 @@ class randomSystem {
                 UG_k = UG_k_1;
 
                 // Gamma calculation
-                Eigen::MatrixXd B = (XGamma_k + UGamma_k) + calcQlinf_i(XQ_k + UQ_k) + calcGAdj(XG_k + UG_k) - (1.0 / rho) * system.K;
-                Gamma_k_1 = solveCG_Gamma_ADMM(B, alpha, rho);
+                Eigen::MatrixXd B = (XGamma_k + UGamma_k) + calcQf_i(XQ_k + UQ_k) + calcGAdj(XG_k + UG_k) - (1.0 / system.rho_admm) * system.K;
+                Gamma_k_1 = solveCG_Gamma_ADMM(B, system.alpha_admm, system.rho_admm, 1e-6, 100000);
 
                 // X's calculation
                 XGamma_k_1 = getXGamma(Gamma_k_1, UGamma_k);
@@ -2561,10 +2621,25 @@ class randomSystem {
                 UQ_k_1 = UQ_k + XQ_k_1 - calcQf_i(Gamma_k_1);
                 UG_k_1 = UG_k + XG_k_1 - calcGf_i(Gamma_k_1);
 
+                r_k_1 = (XGamma_k_1 - Gamma_k_1).norm() + (XQ_k_1 - calcQf_i(Gamma_k_1)).norm() + (XG_k_1 - calcGf_i(Gamma_k_1)).norm();
+                s_k_1 = system.rho_admm * ((UGamma_k_1 - UGamma_k + XGamma_k_1 - XGamma_k).norm() + (UQ_k_1 - UQ_k + XQ_k_1 - XQ_k).norm() + ( UG_k_1 - UG_k + XG_k_1 - XG_k).norm());
+
+                if (r_k_1 > mu*s_k_1) {
+                    system.rho_admm *= tau;
+                    UGamma_k_1 /= tau;
+                    UQ_k_1 /= tau;
+                    UG_k_1 /= tau;
+                } else if (s_k_1 > mu*r_k_1) {
+                    system.rho_admm /= tau;
+                    UGamma_k_1 *= tau;
+                    UQ_k_1 *= tau;
+                    UG_k_1 *= tau;
+                }
+
                 // Print energy
                 double energy = (system.K.array() * Gamma_k_1.array()).sum();
-                std::cout << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Time: " << elapsed << " s" << std::endl;
-                log << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Time: " << elapsed << " s" << std::endl;
+                std::cout << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Residual: " << r_k_1 << ", Time: " << elapsed << " s" << std::endl;
+                log << "Iteration " << k << ", Energy: " << energy << ", Norm diff: " << (Gamma_k - Gamma_k_1).norm() << ", Residual: " << r_k_1 << ", Time: " << elapsed << " s" << std::endl;
 
                 k++;
             }
@@ -2613,6 +2688,20 @@ class randomSystem {
 
             file << "}\n";
         }
+
+        // ----------------------------------------------------------------------------
+        // Closest PSD matrix with trace and norm constraints
+        Eigen::MatrixXd getClosestGamma(const double alpha, const double bis_tol = 1e-6, const unsigned int max_iter = 100000) {
+            Eigen::MatrixXd Gamma = -(1.0 / alpha) * system.K;
+            double traceGamma = system.N * (system.N - 1) / 2.0;
+            double normGammaMin = (system.N * system.N * (system.N - 1) * (system.N - 1)) / (2.0 * system.M * (system.M - 1));
+            double normGammaMax = system.M * (system.N - 1) / 2.0;
+            // Choose a random initial guess for the norm of Gamma within the bounds
+            double normGamma = std::rand() / static_cast<double>(RAND_MAX) * (normGammaMax - normGammaMin) + normGammaMin;
+
+            Eigen::MatrixXd GammaClosest = getFClosestNorm(Gamma, traceGamma, normGamma, bis_tol, max_iter);
+            return GammaClosest;
+        }
         
         // ----------------------------------------------------------------------------
         // Comparison of exact diagonalization and SDP and Dykstra's projection method and ADMM
@@ -2638,7 +2727,7 @@ class randomSystem {
                 system.diagonalizeH();
                 system.performPotentialReduction();
                 system.performProjectionMethod_Dykstra(alpha);
-                system.performADMM(alpha, 1.0, 1e-6, 100000);
+                system.performADMM(alpha, 1.0, 1e-5, 10.0, 2.0, 100000);
 
                 file << "    {\n";
                 file << "      \"M\": " << M << ",\n";
@@ -2740,7 +2829,7 @@ class randomSystem {
                 diagonalizeH();
                 performPotentialReduction();
                 performProjectionMethod_Dykstra(alpha);
-                performADMM(alpha, 1.0, 1e-6, 100000);
+                performADMM(alpha, 1.0, 1e-5, 10.0, 2.0, 100000);
 
                 file << "    {\n";
                 file << "      \"g\": " << system.g << ",\n";
